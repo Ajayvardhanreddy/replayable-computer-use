@@ -1,0 +1,10 @@
+{
+  "run_id": "run_250b20db",
+  "model_calls": 0,
+  "status": "success",
+  "capability": "member.lookup_savings_balance",
+  "version": 1,
+  "outputs": {
+    "savings_balance": "312.45"
+  }
+}
