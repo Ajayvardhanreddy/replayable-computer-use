@@ -1,0 +1,61 @@
+{% extends "workspace_base.html" %}
+{% block title %}Member Profile{% endblock %}
+{% block content %}
+{% if show_dialog %}
+<div class="lc-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="lc-modal-h">
+  <div class="lc-modal">
+    <h2 id="lc-modal-h">System Notice</h2>
+    <p>Please acknowledge the account notice before continuing.</p>
+    <a href="/workspace/member/{{ member.member_number }}?scenario=normal" class="lc-ack-link">Acknowledge</a>
+  </div>
+</div>
+{% endif %}
+<section class="gc2"{% if show_dialog %} inert{% endif %}>
+  <h1 class="lc-h1">Member Profile <span class="lc-panel">Member {{ member.member_number }}</span></h1>
+  <table class="lc-hdr-tbl x-af83">
+    <tbody>
+      <tr><td class="lc-lbl">Name:</td><td>{{ member.name }}</td><td class="lc-lbl">Status:</td><td>{{ member.status }}</td></tr>
+      <tr><td class="lc-lbl">Member Since:</td><td>{{ member.member_since }}</td><td class="lc-lbl">Branch:</td><td>{{ member.branch }}</td></tr>
+      <tr><td class="lc-lbl">Relationship:</td><td>{{ member.relationship }}</td><td class="lc-lbl">Warning:</td><td>{{ member.warning }}</td></tr>
+    </tbody>
+  </table>
+
+  <nav class="lc-tabs" aria-label="Member sections">
+    <a href="#" class="lc-tab lc-tab-active" aria-current="page">Accounts</a>
+    <a href="#" class="lc-tab">Loans</a>
+    <a href="#" class="lc-tab">Cards</a>
+    <a href="#" class="lc-tab">Owners</a>
+    <a href="#" class="lc-tab">Notes</a>
+    <a href="#" class="lc-tab">Maintenance</a>
+  </nav>
+
+  <table class="lc-acct x-af83">
+    <thead>
+      <tr>
+        <th scope="col">Type / Description</th>
+        <th scope="col">Suffix</th>
+        <th scope="col">Current Balance</th>
+        <th scope="col">Available</th>
+        <th scope="col">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for acct in member.accounts %}
+      <tr>
+        <td>{{ acct.type_description }}</td>
+        <td>{{ acct.suffix }}</td>
+        <td>${{ acct.current_balance }}</td>
+        <td>${{ acct.available_balance }}</td>
+        <td>{{ acct.status }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="lc-actions">
+    <button type="button" class="x-b1">Open</button>
+    <a href="#" class="x-b1 lc-linkbtn">History</a>
+    <button type="button" class="x-b1">Transfer</button>
+  </div>
+</section>
+{% endblock %}

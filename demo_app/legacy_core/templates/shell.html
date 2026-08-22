@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>LegacyCore Member Service</title>
+  <link rel="stylesheet" href="/static/legacycore.css">
+</head>
+<body class="lc-app">
+  <header class="lc-hd">
+    <span class="lc-hd-title">LEGACYCORE MEMBER SERVICE</span>
+    <span class="lc-hd-ctx">Branch: {{ branch }} &nbsp; User: {{ user }}</span>
+  </header>
+  <div class="lc-body">
+    <nav class="lc-nav" aria-label="Main">
+      <ul>
+        <li><a href="/workspace/inquiry{{ scenario_suffix }}" target="lc-workspace" class="x-n1">Member Inquiry</a></li>
+        <li><span class="x-n1 lc-nav-disabled" aria-disabled="true">Accounts</span></li>
+        <li><span class="x-n1 lc-nav-disabled" aria-disabled="true">Loans</span></li>
+        <li><span class="x-n1 lc-nav-disabled" aria-disabled="true">Cards</span></li>
+        <li><span class="x-n1 lc-nav-disabled" aria-disabled="true">Notes</span></li>
+        <li><span class="x-n1 lc-nav-disabled" aria-disabled="true">Maintenance</span></li>
+        <li><span class="x-n1 lc-nav-disabled" aria-disabled="true">Teller</span></li>
+        <li><span class="x-n1 lc-nav-disabled" aria-disabled="true">Admin</span></li>
+      </ul>
+    </nav>
+    <main class="lc-workspace-wrap">
+      <iframe name="lc-workspace" title="Workspace" class="lc-frame" src="/workspace/inquiry{{ scenario_suffix }}"></iframe>
+    </main>
+  </div>
+  <footer class="lc-ft">
+    Tool {{ tool_number }} | Session 18:42 remaining | Workstation: {{ workstation }}
+  </footer>
+</body>
+</html>
