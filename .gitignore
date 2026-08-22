@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Project-specific ---
+# macOS
+.DS_Store
+
+# Playwright (ignored pre-emptively; the surface arrives in a later phase)
+test-results/
+playwright-report/
