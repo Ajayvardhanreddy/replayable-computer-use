@@ -1,0 +1,25 @@
+{% extends "workspace_base.html" %}
+{% block title %}Member Inquiry{% endblock %}
+{% block content %}
+<section class="gc2">
+  <h1 class="lc-h1">Member Inquiry <span class="lc-panel">P-2104</span></h1>
+  {% if not_found %}
+  <p class="lc-alert" role="alert">Member record not found.</p>
+  {% endif %}
+  <form method="post" action="/workspace/inquiry{{ scenario_suffix }}" class="tbl-9">
+    <div class="lc-field">
+      <label for="f_mno">Member Number</label>
+      <input type="text" id="f_mno" name="member_number" value="{{ member_number }}" class="x-af83" autocomplete="off">
+    </div>
+    <div class="lc-field">
+      <label for="f_lnm">Last Name</label>
+      <input type="text" id="f_lnm" name="last_name" class="x-af83" autocomplete="off">
+    </div>
+    <div class="lc-actions">
+      <button type="submit" class="x-b1">Search</button>
+      <button type="reset" class="x-b1">Clear</button>
+    </div>
+  </form>
+  <p class="lc-status">Status: Ready</p>
+</section>
+{% endblock %}

@@ -6,6 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic>=2,<3",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
 ]
 
 [dependency-groups]
@@ -13,7 +17,11 @@ dev = [
     "pytest>=8",
     "ruff",
     "mypy",
+    "httpx>=0.27",
 ]
+
+[project.scripts]
+legacy-core = "legacy_core.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -23,7 +31,7 @@ build-backend = "hatchling.build"
 path = "src/computer_use/__init__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/computer_use"]
+packages = ["src/computer_use", "demo_app/legacy_core"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -32,12 +40,22 @@ addopts = "-ra"
 [tool.ruff]
 target-version = "py312"
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "demo_app"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Cookie",
+    "fastapi.Depends",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Query",
+]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src"]
+files = ["src", "demo_app"]
