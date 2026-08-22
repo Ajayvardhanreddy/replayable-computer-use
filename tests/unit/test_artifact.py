@@ -14,6 +14,7 @@ from computer_use.model import (
     OutputSpec,
     ParameterRef,
     ParamType,
+    RiskClass,
     Sensitivity,
     Step,
     TargetDescriptor,
@@ -37,17 +38,20 @@ def build_capability() -> Capability:
                 id="open_member_search",
                 action=ClickAction(),
                 target=TargetDescriptor(role="link", name="Member Search"),
+                risk=RiskClass.READ_ONLY,
                 postcondition=Condition(text_present="Member Lookup"),
             ),
             Step(
                 id="enter_member_id",
                 action=TypeAction(value=ParameterRef(name="member_id")),
                 target=TargetDescriptor(role="textbox", label="Member Number"),
+                risk=RiskClass.READ_ONLY,
             ),
             Step(
                 id="submit_lookup",
                 action=ClickAction(),
                 target=TargetDescriptor(role="button", name="Search"),
+                risk=RiskClass.READ_ONLY,
                 postcondition=Condition(heading=Heading(role="heading", name="Member Profile")),
                 outcomes=[
                     Outcome(
@@ -61,6 +65,7 @@ def build_capability() -> Capability:
                 id="extract_balance",
                 action=ExtractAction(),
                 target=TargetDescriptor(role="cell", text="Current Balance"),
+                risk=RiskClass.READ_ONLY,
                 output="savings_balance",
             ),
         ],
@@ -96,19 +101,33 @@ def test_target_descriptor_requires_identity() -> None:
         TargetDescriptor(frame="workspace")  # frame alone is context, not identity
 
 
+def test_step_requires_risk() -> None:
+    with pytest.raises(ValidationError):
+        Step(
+            id="submit",
+            action=ClickAction(),
+            target=TargetDescriptor(role="button", name="Search"),
+        )
+
+
 def test_click_requires_target() -> None:
     with pytest.raises(ValidationError):
-        Step(id="s", action=ClickAction(), target=None)
+        Step(id="s", action=ClickAction(), target=None, risk=RiskClass.READ_ONLY)
 
 
 def test_extract_requires_output() -> None:
     with pytest.raises(ValidationError):
-        Step(id="s", action=ExtractAction(), target=TargetDescriptor(text="Balance"))
+        Step(
+            id="s",
+            action=ExtractAction(),
+            target=TargetDescriptor(text="Balance"),
+            risk=RiskClass.READ_ONLY,
+        )
 
 
 def test_extract_requires_target() -> None:
     with pytest.raises(ValidationError):
-        Step(id="s", action=ExtractAction(), output="savings_balance")
+        Step(id="s", action=ExtractAction(), output="savings_balance", risk=RiskClass.READ_ONLY)
 
 
 def test_output_only_valid_for_extract() -> None:
@@ -117,6 +136,7 @@ def test_output_only_valid_for_extract() -> None:
             id="s",
             action=ClickAction(),
             target=TargetDescriptor(role="button", name="Search"),
+            risk=RiskClass.READ_ONLY,
             output="savings_balance",
         )
 
@@ -129,5 +149,36 @@ def test_type_action_requires_value() -> None:
 def test_capability_requires_steps() -> None:
     data = build_capability().model_dump()
     data["steps"] = []
+    with pytest.raises(ValidationError):
+        Capability.model_validate(data)
+
+
+def test_capability_id_must_be_non_empty() -> None:
+    data = build_capability().model_dump()
+    data["id"] = ""
+    with pytest.raises(ValidationError):
+        Capability.model_validate(data)
+
+
+def test_step_id_must_be_non_empty() -> None:
+    with pytest.raises(ValidationError):
+        Step(
+            id="   ",
+            action=ClickAction(),
+            target=TargetDescriptor(role="button", name="Search"),
+            risk=RiskClass.READ_ONLY,
+        )
+
+
+def test_capability_version_must_be_positive() -> None:
+    data = build_capability().model_dump()
+    data["version"] = 0
+    with pytest.raises(ValidationError):
+        Capability.model_validate(data)
+
+
+def test_step_ids_must_be_unique() -> None:
+    data = build_capability().model_dump()
+    data["steps"][1]["id"] = data["steps"][0]["id"]
     with pytest.raises(ValidationError):
         Capability.model_validate(data)

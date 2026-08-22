@@ -63,3 +63,8 @@ def test_policy_decision_requires_reason() -> None:
     assert deny.effect is PolicyEffect.DENY
     with pytest.raises(ValidationError):
         PolicyDecision(effect=PolicyEffect.ALLOW)
+
+
+def test_model_calls_must_be_non_negative() -> None:
+    with pytest.raises(ValidationError):
+        Success(run_id="run_1", capability="c", version=1, model_calls=-1)

@@ -1,8 +1,9 @@
 """Structured evidence event shape (the unit of JSONL observability).
 
-Phase 1 defines only the *shape*. The redaction / sanitization boundary that
-guarantees no raw secret or PII enters ``attributes`` is a later phase; this
-type makes no safety claim on its own.
+This type defines only the *shape* of an evidence record. The redaction /
+sanitization boundary that guarantees no raw secret or PII enters
+``attributes`` is enforced by the evidence layer, not by this type; on its own
+it makes no safety claim.
 """
 
 from __future__ import annotations

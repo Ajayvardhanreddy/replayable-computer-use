@@ -38,9 +38,9 @@ class DerivedValue(BaseModel):
     """A value computed deterministically from other ValueRefs.
 
     ``function`` is a *symbolic* identifier for a deterministic transform (e.g.
-    ``"format_date"``). Phase 1 does not execute it: there is no eval, no
+    ``"format_date"``). This data layer never executes it: there is no eval, no
     arbitrary function dispatch, and no transform engine. Resolving a derived
-    value against an allowlisted registry is deferred to a later phase.
+    value against an allowlisted registry is the runtime's responsibility.
     """
 
     model_config = ConfigDict(extra="forbid")

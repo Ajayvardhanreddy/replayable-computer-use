@@ -16,7 +16,7 @@ from .enums import PolicyEffect
 
 
 class PolicyDecision(BaseModel):
-    """Result of a policy/allowlist check. The engine itself is a later phase."""
+    """Result of a policy/allowlist check; produced by the policy/safety layer."""
 
     model_config = ConfigDict(extra="forbid")
     effect: PolicyEffect
@@ -27,7 +27,7 @@ class PolicyDecision(BaseModel):
 class _RunResultBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run_id: str
-    model_calls: int = 0
+    model_calls: int = Field(default=0, ge=0)
 
 
 class Success(_RunResultBase):

@@ -1,7 +1,7 @@
 """Core typed contracts for the computer-use system.
 
-Phase 1: pure data contracts with serialization and fail-closed validation.
-No execution, surface, discovery, or replay logic lives here.
+Pure data contracts with serialization and fail-closed validation. No
+execution, surface, discovery, or replay logic lives in this layer.
 """
 
 from __future__ import annotations

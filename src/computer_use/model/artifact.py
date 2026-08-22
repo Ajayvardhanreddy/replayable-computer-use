@@ -111,10 +111,17 @@ class Step(BaseModel):
     id: str
     action: Action
     target: TargetDescriptor | None = None
-    risk: RiskClass = RiskClass.READ_ONLY
+    risk: RiskClass
     postcondition: Condition | None = None
     outcomes: list[Outcome] = Field(default_factory=list)
     output: str | None = None
+
+    @field_validator("id")
+    @classmethod
+    def _non_blank_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("id must be non-empty")
+        return value
 
     @model_validator(mode="after")
     def _structural_rules(self) -> Self:
@@ -146,7 +153,8 @@ class CapabilityTarget(BaseModel):
     """Vendor/product identity of the app a capability runs against.
 
     Grounds the multi-tenant reuse seam. Per-tenant/version bindings and route
-    overrides are deferred (design-only for this take-home).
+    overrides are not modeled here; the resolution layer applies them as
+    overrides onto this base identity.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -158,7 +166,7 @@ class Capability(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: str = SCHEMA_VERSION
     id: str
-    version: int
+    version: int = Field(ge=1)
     target: CapabilityTarget
     inputs: dict[str, InputSpec] = Field(default_factory=dict)
     outputs: dict[str, OutputSpec] = Field(default_factory=dict)
@@ -180,3 +188,17 @@ class Capability(BaseModel):
         if not value:
             raise ValueError("capability requires at least one step")
         return value
+
+    @field_validator("id")
+    @classmethod
+    def _non_blank_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("id must be non-empty")
+        return value
+
+    @model_validator(mode="after")
+    def _unique_step_ids(self) -> Self:
+        step_ids = [step.id for step in self.steps]
+        if len(step_ids) != len(set(step_ids)):
+            raise ValueError("step ids must be unique within a capability")
+        return self
