@@ -224,3 +224,6 @@ __marimo__/
 # Playwright (ignored pre-emptively; the surface arrives in a later phase)
 test-results/
 playwright-report/
+
+# Scratch discovery output; the canonical committed artifact lives in evidence/capability/
+artifacts/

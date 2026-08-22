@@ -22,11 +22,13 @@ from .artifact import (
     ScrollAction,
     SelectAction,
     Step,
+    TableCellTarget,
     TargetDescriptor,
     TypeAction,
 )
 from .enums import OutcomeClass, ParamType, PolicyEffect, RiskClass, Sensitivity
 from .events import EvidenceEvent
+from .proposals import ProposedAction, ProposedActionType
 from .results import (
     BusinessOutcome,
     Escalated,
@@ -69,6 +71,8 @@ __all__ = [
     "ParameterRef",
     "PolicyDecision",
     "PolicyEffect",
+    "ProposedAction",
+    "ProposedActionType",
     "RequestHumanAction",
     "RiskClass",
     "RunResult",
@@ -79,6 +83,7 @@ __all__ = [
     "Sensitivity",
     "Step",
     "Success",
+    "TableCellTarget",
     "TargetDescriptor",
     "TypeAction",
     "ValueRef",

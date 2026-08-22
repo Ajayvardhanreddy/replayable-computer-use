@@ -18,11 +18,35 @@ from .values import Condition, ValueRef
 SCHEMA_VERSION = "1.0"
 
 
+class TableCellTarget(BaseModel):
+    """Identify a table cell relationally, by stable identity rather than value.
+
+    The cell is the one under ``column_header`` in the row containing
+    ``row_contains``. Both are workflow constants (static selector metadata, not
+    action values), so they are plain strings. This is the minimal baseline
+    primitive for a table with a real header row; resilient/hostile-table
+    resolution (missing headers, reordered or duplicate rows, parameterized row
+    matching) is a resolver concern handled elsewhere.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    row_contains: str
+    column_header: str
+
+    @field_validator("row_contains", "column_header")
+    @classmethod
+    def _non_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("table_cell identifiers must be non-empty")
+        return value
+
+
 class TargetDescriptor(BaseModel):
     """Semantic identity of a control. Prefers accessibility over CSS.
 
-    ``frame`` is context only; at least one of role/name/label/text is required
-    so an empty descriptor fails closed rather than matching anything.
+    ``frame`` is context only; at least one of role/name/label/text or a
+    ``table_cell`` relation is required so an empty descriptor fails closed
+    rather than matching anything.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -31,11 +55,14 @@ class TargetDescriptor(BaseModel):
     label: str | None = None
     text: str | None = None
     frame: str | None = None
+    table_cell: TableCellTarget | None = None
 
     @model_validator(mode="after")
     def _require_identity(self) -> Self:
-        if not (self.role or self.name or self.label or self.text):
-            raise ValueError("TargetDescriptor requires at least one of role/name/label/text")
+        if not (self.role or self.name or self.label or self.text or self.table_cell):
+            raise ValueError(
+                "TargetDescriptor requires one of role/name/label/text or a table_cell"
+            )
         return self
 
 

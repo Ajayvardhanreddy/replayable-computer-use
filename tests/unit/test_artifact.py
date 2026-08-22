@@ -17,6 +17,7 @@ from computer_use.model import (
     RiskClass,
     Sensitivity,
     Step,
+    TableCellTarget,
     TargetDescriptor,
     TypeAction,
 )
@@ -182,3 +183,25 @@ def test_step_ids_must_be_unique() -> None:
     data["steps"][1]["id"] = data["steps"][0]["id"]
     with pytest.raises(ValidationError):
         Capability.model_validate(data)
+
+
+def test_table_cell_target_is_valid_identity() -> None:
+    target = TargetDescriptor(
+        table_cell=TableCellTarget(row_contains="Share Savings", column_header="Current Balance")
+    )
+    reloaded = TargetDescriptor.model_validate_json(target.model_dump_json())
+    assert reloaded == target
+    assert reloaded.table_cell is not None
+    assert reloaded.table_cell.row_contains == "Share Savings"
+
+
+def test_table_cell_target_requires_both_fields() -> None:
+    with pytest.raises(ValidationError):
+        TableCellTarget(row_contains="Share Savings")  # missing column_header
+
+
+def test_table_cell_target_rejects_blank_identifiers() -> None:
+    with pytest.raises(ValidationError):
+        TableCellTarget(row_contains="   ", column_header="Current Balance")
+    with pytest.raises(ValidationError):
+        TableCellTarget(row_contains="Share Savings", column_header="")
