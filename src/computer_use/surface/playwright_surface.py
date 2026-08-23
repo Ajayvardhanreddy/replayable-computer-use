@@ -47,7 +47,7 @@ _HARVEST_JS = """
   };
   const inputs = 'input[type=text], input:not([type])';
   document.querySelectorAll(inputs).forEach((el) => {
-    out.push({ role: 'textbox', name: nm(el) });
+    out.push({ role: 'textbox', name: nm(el), filled: !!(el.value && el.value.trim()) });
   });
   document.querySelectorAll('button').forEach((el) => {
     out.push({ role: 'button', name: (el.innerText || '').trim() });
@@ -183,6 +183,7 @@ class PlaywrightSurface:
                         text=item.get("text"),
                         row=item.get("row"),
                         column=item.get("column"),
+                        filled=item.get("filled"),
                     )
                 )
         return Observation(route=urlparse(self._pg().url).path, candidates=candidates)

@@ -44,6 +44,7 @@ class ModelCandidate(BaseModel):
     frame: str | None = None
     row: str | None = None
     column: str | None = None
+    filled: bool | None = None
 
 
 class ModelObservation(BaseModel):

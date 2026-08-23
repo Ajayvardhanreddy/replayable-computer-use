@@ -60,6 +60,7 @@ def _minimize(candidate: Candidate) -> ModelCandidate:
     return ModelCandidate(
         id=candidate.id, role=candidate.role, name=candidate.name,
         frame=candidate.frame, row=candidate.row, column=candidate.column,
+        filled=candidate.filled,
     )
 
 
@@ -94,6 +95,7 @@ async def discover(
 
     trace_steps: list[TraceStep] = []
     history: list[str] = []
+    obtained_outputs: set[str] = set()
     model_calls = 0
     consecutive_errors = 0
     last_signature: str | None = None
@@ -126,13 +128,34 @@ async def discover(
             continue
 
         if proposal.action is ProposedActionType.DECLARE_SUCCESS:
-            stop_reason = "GOAL_REACHED"
-            break
+            # The model may PROPOSE success, but software ratifies it: the goal is only
+            # reached once the required declared output has actually been obtained.
+            if spec.success_output in obtained_outputs:
+                stop_reason = "GOAL_REACHED"
+                break
+            last_error = f"cannot declare success: output '{spec.success_output}' not obtained"
+            consecutive_errors += 1
+            if evidence is not None:
+                evidence.write(step_rejected_event(run_id, "SUCCESS_PRECONDITION_FAILED"))
+            if consecutive_errors >= _STUCK_LIMIT:
+                stop_reason = "STUCK"
+                break
+            continue
         if proposal.action is ProposedActionType.REQUEST_HUMAN:
             stop_reason = "HUMAN_REQUESTED"
             break
         if proposal.action is ProposedActionType.OBSERVE:
             last_error = None
+            continue
+        if proposal.action is ProposedActionType.EXTRACT and proposal.output not in spec.outputs:
+            # The model cannot invent an output; it must bind one the capability declares.
+            last_error = f"unknown output {proposal.output!r}; declared: {sorted(spec.outputs)}"
+            consecutive_errors += 1
+            if evidence is not None:
+                evidence.write(step_rejected_event(run_id, "UNKNOWN_OUTPUT"))
+            if consecutive_errors >= _STUCK_LIMIT:
+                stop_reason = "STUCK"
+                break
             continue
 
         heading_before: str | None = None
@@ -170,6 +193,12 @@ async def discover(
             )
         )
         history.append(signature)
+        if (
+            execution.action is ProposedActionType.EXTRACT
+            and execution.extracted is not None
+            and proposal.output is not None
+        ):
+            obtained_outputs.add(proposal.output)
         if evidence is not None:
             evidence.write(
                 step_executed_event(run_id, len(trace_steps), execution, proposal.output)
