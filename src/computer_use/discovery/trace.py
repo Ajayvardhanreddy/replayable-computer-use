@@ -17,6 +17,12 @@ class TraceStep(BaseModel):
     # A stable landmark (e.g. a heading) observed after the action, used to
     # synthesize a deterministic postcondition.
     observed_landmark: str | None = None
+    # The primary heading before a state-changing action. The compiler requires a
+    # genuine before/after delta, so a checkpoint is never an already-true state.
+    heading_before: str | None = None
+    # Model-proposed expected effect (non-authoritative intent) carried for review;
+    # it never establishes a postcondition — software owns the observed delta.
+    expected_effect: str | None = None
 
 
 class DiscoveryTrace(BaseModel):

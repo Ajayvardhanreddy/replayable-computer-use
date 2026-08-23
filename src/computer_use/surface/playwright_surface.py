@@ -163,6 +163,8 @@ class PlaywrightSurface:
     def _locator(self, frame: Frame, target: TargetDescriptor) -> Locator:
         if target.role and target.name:
             return frame.locator(f'role={target.role}[name="{target.name}"]')
+        if target.label:
+            return frame.get_by_label(target.label, exact=True)
         if target.text:
             return frame.get_by_text(target.text, exact=True)
         raise TargetNotFoundError("unsupported target descriptor for this surface")
@@ -301,6 +303,9 @@ class PlaywrightSurface:
     async def wait_for_heading_change(
         self, previous: str | None, timeout_ms: int = 5000
     ) -> str | None:
+        # Return the new heading only if it actually changed; on timeout return
+        # None (no change) rather than the stale heading, so callers never treat
+        # an unchanged page as a transition.
         waited = 0
         while waited < timeout_ms:
             current = await self.primary_heading()
@@ -308,7 +313,7 @@ class PlaywrightSurface:
                 return current
             await self._pg().wait_for_timeout(100)
             waited += 100
-        return await self.primary_heading()
+        return None
 
     async def close(self) -> None:
         if self._browser is not None:

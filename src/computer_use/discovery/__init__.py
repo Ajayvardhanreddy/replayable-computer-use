@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .agent import DiscoveryOutcome, discover
-from .compiler import GoalSpec, compile_capability
+from .compiler import CapabilityValidationError, GoalSpec, OutcomeBinding, compile_capability
 from .model import (
     DiscoveryModel,
     GoalContext,
@@ -15,6 +15,7 @@ from .model import (
 from .trace import DiscoveryTrace, TraceStep
 
 __all__ = [
+    "CapabilityValidationError",
     "DiscoveryModel",
     "DiscoveryOutcome",
     "DiscoveryTrace",
@@ -24,6 +25,7 @@ __all__ = [
     "ModelCandidate",
     "ModelObservation",
     "ModelOutputError",
+    "OutcomeBinding",
     "TraceStep",
     "compile_capability",
     "discover",

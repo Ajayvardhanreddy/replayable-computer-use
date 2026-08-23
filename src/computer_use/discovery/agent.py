@@ -190,6 +190,8 @@ async def discover(
                 value=execution.value,
                 output=proposal.output,
                 observed_landmark=landmark,
+                heading_before=heading_before,
+                expected_effect=proposal.expected_effect,
             )
         )
         history.append(signature)

@@ -32,3 +32,7 @@ class ProposedAction(BaseModel):
     value: ValueRef | None = None
     output: str | None = None
     reason: str | None = None
+    # What the model expects to observe after a state-changing action. This is
+    # non-authoritative intent: the trusted runtime records the actual before/after
+    # observation, and this value never by itself establishes a postcondition.
+    expected_effect: str | None = None

@@ -8,8 +8,9 @@ import os
 from pathlib import Path
 
 import typer
+from pydantic import ValidationError
 
-from computer_use.discovery import GoalSpec, compile_capability, discover
+from computer_use.discovery import GoalSpec, OutcomeBinding, compile_capability, discover
 from computer_use.discovery.anthropic_model import DEFAULT_MODEL, AnthropicDiscoveryModel
 from computer_use.execution import TrustedKernel, ValueResolver, replay
 from computer_use.model import (
@@ -23,6 +24,7 @@ from computer_use.model import (
     ParamType,
     ProposedActionType,
     Sensitivity,
+    TargetDescriptor,
 )
 from computer_use.observability import EvidenceStore
 from computer_use.safety import Policy, RiskClassifier
@@ -50,10 +52,14 @@ def _capability_a_spec(goal: str) -> GoalSpec:
         },
         success_output="savings_balance",
         business_outcomes=[
-            Outcome(
-                code="MEMBER_NOT_FOUND",
-                outcome_class=OutcomeClass.BUSINESS_OUTCOME,
-                detector=Condition(text_present="Member record not found"),
+            OutcomeBinding(
+                action=ProposedActionType.CLICK,
+                target=TargetDescriptor(role="button", name="Search"),
+                outcome=Outcome(
+                    code="MEMBER_NOT_FOUND",
+                    outcome_class=OutcomeClass.BUSINESS_OUTCOME,
+                    detector=Condition(text_present="Member record not found"),
+                ),
             )
         ],
     )
@@ -129,7 +135,13 @@ def replay_command(
     param: list[str] = typer.Option([], "--param", "-p"),
     target: str = typer.Option("http://localhost:8000", "--target"),
 ) -> None:
-    capability = Capability.model_validate_json(Path(artifact).read_text(encoding="utf-8"))
+    try:
+        capability = Capability.model_validate_json(Path(artifact).read_text(encoding="utf-8"))
+    except ValidationError as error:
+        # Static validation runs on load, so an invalid or hand-edited artifact is
+        # rejected before it can drive the browser.
+        typer.echo(f"invalid capability artifact: {error}")
+        raise typer.Exit(code=1) from error
     result = asyncio.run(
         replay(capability, _parse_params(param), target, safe_clicks=_SAFE_CLICKS)
     )
