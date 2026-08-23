@@ -45,7 +45,7 @@ def build_capability() -> Capability:
             Step(
                 id="enter_member_id",
                 action=TypeAction(value=ParameterRef(name="member_id")),
-                target=TargetDescriptor(role="textbox", label="Member Number"),
+                target=TargetDescriptor(label="Member Number"),
                 risk=RiskClass.READ_ONLY,
             ),
             Step(

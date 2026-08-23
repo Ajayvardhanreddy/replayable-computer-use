@@ -1,7 +1,8 @@
-"""Opt-in genuine Anthropic discovery. Skipped unless ANTHROPIC_API_KEY is set.
+"""Opt-in genuine Anthropic discovery — the only test that calls a real model API.
 
-This is the only test that makes a real model API call. Run it explicitly with a
-key present; the default offline suite skips it.
+Run it explicitly with ``uv run pytest --run-live`` and ``ANTHROPIC_API_KEY`` set.
+A bare ``pytest`` never runs it, even when the key is exported, so an ordinary run
+does not spend credits.
 """
 
 import os
@@ -23,12 +24,7 @@ from computer_use.model import (
 from computer_use.safety import Policy, RiskClassifier
 from computer_use.surface import PlaywrightSurface
 
-pytestmark = [
-    pytest.mark.live,
-    pytest.mark.skipif(
-        not os.getenv("ANTHROPIC_API_KEY"), reason="requires ANTHROPIC_API_KEY (opt-in)"
-    ),
-]
+pytestmark = pytest.mark.live
 
 _ALLOWED = frozenset(
     {ProposedActionType.CLICK, ProposedActionType.TYPE, ProposedActionType.EXTRACT}
@@ -52,6 +48,8 @@ def _spec() -> GoalSpec:
 
 
 async def test_genuine_anthropic_discovery_then_replay(legacy_core_url: str) -> None:
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        pytest.skip("ANTHROPIC_API_KEY required for --run-live")
     spec = _spec()
     surface = PlaywrightSurface()
     await surface.start()

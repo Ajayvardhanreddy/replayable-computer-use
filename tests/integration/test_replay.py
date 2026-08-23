@@ -1,4 +1,10 @@
-from computer_use.discovery import DiscoveryTrace, GoalSpec, TraceStep, compile_capability
+from computer_use.discovery import (
+    DiscoveryTrace,
+    GoalSpec,
+    OutcomeBinding,
+    TraceStep,
+    compile_capability,
+)
 from computer_use.execution import replay
 from computer_use.model import (
     BusinessOutcome,
@@ -62,10 +68,14 @@ def _capability() -> Capability:
         },
         success_output="savings_balance",
         business_outcomes=[
-            Outcome(
-                code="MEMBER_NOT_FOUND",
-                outcome_class=OutcomeClass.BUSINESS_OUTCOME,
-                detector=Condition(text_present="Member record not found"),
+            OutcomeBinding(
+                action=ProposedActionType.CLICK,
+                target=TargetDescriptor(role="button", name="Search"),
+                outcome=Outcome(
+                    code="MEMBER_NOT_FOUND",
+                    outcome_class=OutcomeClass.BUSINESS_OUTCOME,
+                    detector=Condition(text_present="Member record not found"),
+                ),
             )
         ],
     )
