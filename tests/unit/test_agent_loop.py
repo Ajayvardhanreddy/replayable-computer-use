@@ -85,16 +85,98 @@ def _spec() -> GoalSpec:
     )
 
 
-async def test_repeated_action_trips_stuck_before_max_steps() -> None:
-    surface = _LoopSurface()
-    kernel = TrustedKernel(
+def _kernel(surface: _LoopSurface, inputs: dict[str, str] | None = None) -> TrustedKernel:
+    return TrustedKernel(
         surface,
         Policy(allowed_actions=_ALLOWED),
         RiskClassifier(safe_click_names=frozenset({"Search"})),
-        ValueResolver({"member_number": "12345"}),
+        ValueResolver(inputs or {}),
     )
+
+
+class _AlwaysDeclareSuccessModel:
+    provider = "fake"
+    model_id = "premature"
+
+    async def decide(self, goal: GoalContext, observation: ModelObservation) -> ProposedAction:
+        return ProposedAction(action=ProposedActionType.DECLARE_SUCCESS)
+
+
+class _BogusOutputModel:
+    provider = "fake"
+    model_id = "bogus-output"
+
+    async def decide(self, goal: GoalContext, observation: ModelObservation) -> ProposedAction:
+        return ProposedAction(
+            action=ProposedActionType.EXTRACT, candidate_id="c1", output="not_a_real_output"
+        )
+
+
+class _CellSurface(_LoopSurface):
+    async def observe(self) -> Observation:
+        return Observation(
+            route="/profile",
+            candidates=[
+                Candidate(
+                    id="cell1", role="cell", row="Share Savings",
+                    column="Current Balance", frame="lc-workspace",
+                )
+            ],
+        )
+
+    async def extract(self, target: TargetDescriptor) -> str:
+        return "$8,421.31"
+
+
+class _ExtractThenSucceedModel:
+    provider = "fake"
+    model_id = "ok"
+
+    def __init__(self) -> None:
+        self._extracted = False
+
+    async def decide(self, goal: GoalContext, observation: ModelObservation) -> ProposedAction:
+        if not self._extracted:
+            self._extracted = True
+            return ProposedAction(
+                action=ProposedActionType.EXTRACT, candidate_id="cell1", output="savings_balance"
+            )
+        return ProposedAction(action=ProposedActionType.DECLARE_SUCCESS)
+
+
+async def test_repeated_action_trips_stuck_before_max_steps() -> None:
+    surface = _LoopSurface()
     outcome = await discover(
-        _RepeatingModel(), surface, kernel, _spec(), "http://localhost", max_steps=12
+        _RepeatingModel(), surface, _kernel(surface, {"member_number": "12345"}),
+        _spec(), "http://localhost", max_steps=12,
     )
     assert outcome.stop_reason == "STUCK"
     assert outcome.model_calls == 3  # bounded, not the full 12-step budget
+
+
+async def test_premature_declare_success_is_not_ratified() -> None:
+    surface = _LoopSurface()
+    outcome = await discover(
+        _AlwaysDeclareSuccessModel(), surface, _kernel(surface), _spec(), "http://localhost"
+    )
+    assert outcome.stop_reason != "GOAL_REACHED"
+    assert outcome.stop_reason == "STUCK"
+    assert outcome.trace.steps == []
+
+
+async def test_extract_of_undeclared_output_is_rejected() -> None:
+    surface = _LoopSurface()
+    outcome = await discover(
+        _BogusOutputModel(), surface, _kernel(surface), _spec(), "http://localhost"
+    )
+    assert outcome.stop_reason != "GOAL_REACHED"
+    assert outcome.trace.steps == []  # nothing was executed
+
+
+async def test_success_after_required_extraction_is_ratified() -> None:
+    surface = _CellSurface()
+    outcome = await discover(
+        _ExtractThenSucceedModel(), surface, _kernel(surface), _spec(), "http://localhost"
+    )
+    assert outcome.stop_reason == "GOAL_REACHED"
+    assert len(outcome.trace.steps) == 1  # the extract

@@ -1,7 +1,7 @@
-"""Minimal capability-scope policy: an action-type allowlist.
+"""Capability-scope policy: an allowlist of permitted action types.
 
-The domain/route allowlist and richer scope rules are a later safety phase; this
-proves that an action outside the capability's permitted vocabulary is denied.
+This enforces the capability's permitted action vocabulary. Domain/route scoping is the
+responsibility of the broader safety layer, not this check.
 """
 
 from __future__ import annotations

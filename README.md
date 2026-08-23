@@ -1,10 +1,11 @@
 # replayable-computer-use
 
-LLM-discovered, typed computer-use capabilities with deterministic replay, safety guardrails,
-and same-session human handoff for legacy banking UIs.
+LLM-discovered, typed computer-use capabilities that replay deterministically against legacy
+banking UIs, with a software-owned trust boundary and safety guardrails.
 
-> **Status: bootstrap / under construction.** The end-to-end discovery → capability → replay
-> flow is not implemented yet. This README documents only what currently exists.
+> **Status: in progress.** The core discovery → capability → replay vertical slice is
+> implemented and tested. Safety hardening, human-in-the-loop takeover, and the full
+> write-up are still in progress. This README documents only what currently exists.
 
 ## Requirements
 
@@ -48,4 +49,22 @@ Secrets are never committed. See `.env.example` for the variables the project re
 
 ## Demo path
 
-_To be added once the discovery and replay CLI lands._
+Discovery runs a genuine LLM against the live app and needs a model key; replay never does.
+
+```bash
+uv run legacy-core                       # terminal 1: the target app
+
+# genuine discovery -> writes artifacts/member_lookup.v1.json
+export ANTHROPIC_API_KEY=...
+uv run cua discover \
+  --goal "Look up this member and return their savings balance" \
+  --param member_number=12345 --target http://localhost:8000
+
+# deterministic replay with a different input, no model in the loop (model_calls = 0)
+unset ANTHROPIC_API_KEY
+uv run cua replay artifacts/member_lookup.v1.json --param member_number=54321
+uv run cua replay artifacts/member_lookup.v1.json --param member_number=99999
+```
+
+Without a model key you can still replay the committed artifact at
+`evidence/capability/member_lookup.v1.json`.
