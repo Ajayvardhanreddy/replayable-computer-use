@@ -49,7 +49,9 @@ _RETRY_BACKOFF_MS = 200
 
 # Kernel authorization rejections mapped to the public failure taxonomy. Codes that
 # a statically-validated artifact cannot reach (missing value/output, non-executable)
-# default to POLICY_DENIED: the kernel refused to authorize the step.
+# default to POLICY_DENIED: the kernel refused to authorize the step. An ambiguous or
+# missing locator is returned as a fail-closed typed Failure rather than acted on;
+# routing such a stop to a human operator is a separate concern.
 _REJECTION_TO_FAILURE = {
     RejectionCode.TARGET_MISSING: FailureCode.TARGET_MISSING,
     RejectionCode.LOCATOR_AMBIGUOUS: FailureCode.LOCATOR_AMBIGUOUS,

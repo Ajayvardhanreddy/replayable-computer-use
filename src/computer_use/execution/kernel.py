@@ -147,7 +147,8 @@ class TrustedKernel:
         value: ValueRef | None,
         output: str | None,
     ) -> KernelExecution:
-        # Policy scope.
+        # Policy scope. This gates on action type today; a target-scoped rule should
+        # gate on the resolved control (see _resolve_target), not the primary descriptor.
         decision = self._policy.check(action, target)
         if decision.effect is PolicyEffect.DENY:
             raise KernelRejection(RejectionCode.POLICY_DENIED, decision.reason)

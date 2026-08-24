@@ -224,6 +224,14 @@ async def test_locator_fallback_succeeds_when_primary_missing() -> None:
     assert fake.clicks[0].name == "Search"  # the ordered fallback was used
 
 
+async def test_ambiguous_primary_is_not_dodged_by_a_fallback() -> None:
+    fake = _FakeSurface(counts={"Find": 2})  # primary ambiguous, though a clean fallback exists
+    result = await _run(fake, fallback=True)
+    assert isinstance(result, Failure)
+    assert result.code is FailureCode.LOCATOR_AMBIGUOUS
+    assert fake.clicks == []  # ambiguity is never escaped by trying the fallback
+
+
 async def test_checkpoint_failure_reports_observed_state() -> None:
     fake = _FakeSurface(heading="Member Inquiry")  # never reaches "Member Profile"
     result = await _run(fake, timeout=200)

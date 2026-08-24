@@ -254,7 +254,7 @@ def _parameter_names(value: ValueRef) -> set[str]:
     return set()  # SafeLiteral / SecretRef carry no declared-input reference
 
 
-def _matchers_used(condition: Condition) -> set[str]:
+def _top_level_matchers(condition: Condition) -> set[str]:
     used: set[str] = set()
     if condition.text_present is not None:
         used.add("text_present")
@@ -266,15 +266,17 @@ def _matchers_used(condition: Condition) -> set[str]:
         used.add("output_present")
     if condition.any_of is not None:
         used.add("any_of")
-        for sub in condition.any_of:
-            used |= _matchers_used(sub)
     return used
 
 
 def _forbid_matchers(condition: Condition, allowed: frozenset[str], where: str) -> None:
-    extra = _matchers_used(condition) - allowed
+    extra = _top_level_matchers(condition) - allowed
     if extra:
         raise ValueError(f"{where}: matcher(s) {sorted(extra)} are not accepted here")
+    # any_of subconditions are live conditions; output_present is top-level only
+    # (it is verified against extracted outputs, never as a live matcher).
+    for sub in condition.any_of or []:
+        _forbid_matchers(sub, _STEP_MATCHERS, f"{where} (any_of)")
 
 
 class Capability(BaseModel):
