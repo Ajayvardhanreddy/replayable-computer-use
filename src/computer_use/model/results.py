@@ -8,11 +8,26 @@ Failure carries enough detail to debug.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .enums import PolicyEffect
+
+
+class FailureCode(StrEnum):
+    """Stable, typed taxonomy for a hard replay Failure.
+
+    Business outcomes (e.g. MEMBER_NOT_FOUND) are a BusinessOutcome, not a Failure,
+    and keep an open string code; only hard failures are drawn from this closed set.
+    """
+
+    TARGET_MISSING = "TARGET_MISSING"
+    LOCATOR_AMBIGUOUS = "LOCATOR_AMBIGUOUS"
+    CHECKPOINT_FAILED = "CHECKPOINT_FAILED"
+    SURFACE_ERROR = "SURFACE_ERROR"
+    POLICY_DENIED = "POLICY_DENIED"
 
 
 class PolicyDecision(BaseModel):
@@ -53,7 +68,7 @@ class Escalated(_RunResultBase):
 
 class Failure(_RunResultBase):
     status: Literal["failure"] = "failure"
-    code: str
+    code: FailureCode
     step_id: str | None = None
     expected: str | None = None
     observed: str | None = None

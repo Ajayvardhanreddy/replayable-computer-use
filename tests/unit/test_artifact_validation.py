@@ -123,6 +123,61 @@ def test_table_cell_target_is_extract_only() -> None:
         )
 
 
+def test_fallbacks_must_be_depth_one() -> None:
+    with pytest.raises(ValidationError, match="must not be nested"):
+        TargetDescriptor(
+            role="button",
+            name="A",
+            fallbacks=[
+                TargetDescriptor(
+                    role="button",
+                    name="B",
+                    fallbacks=[TargetDescriptor(role="button", name="C")],
+                )
+            ],
+        )
+
+
+def test_fallback_obeys_single_identity() -> None:
+    with pytest.raises(ValidationError, match="conflicting identity forms"):
+        TargetDescriptor(
+            role="button",
+            name="A",
+            fallbacks=[TargetDescriptor(role="button", name="B", text="B")],
+        )
+
+
+def test_table_cell_fallback_on_a_click_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="table_cell target is only valid for extract"):
+        Step(
+            id="bad",
+            action=ClickAction(),
+            target=TargetDescriptor(
+                role="button",
+                name="Search",
+                fallbacks=[
+                    TargetDescriptor(
+                        table_cell=TableCellTarget(row_contains="A", column_header="B")
+                    )
+                ],
+            ),
+            risk=RiskClass.READ_ONLY,
+        )
+
+
+def test_output_present_nested_in_any_of_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="not accepted here"):
+        Capability(
+            id="member.lookup_savings_balance",
+            version=1,
+            target=CapabilityTarget(vendor="legacy_core", application_family="core_banking"),
+            inputs={"member_number": InputSpec(type=ParamType.STRING)},
+            outputs={"savings_balance": OutputSpec(type=ParamType.DECIMAL)},
+            steps=_steps(),
+            success_checkpoint=Condition(any_of=[Condition(output_present="savings_balance")]),
+        )
+
+
 def test_target_identity_form_conflicts_are_rejected() -> None:
     with pytest.raises(ValidationError, match="table_cell target must not mix"):
         TargetDescriptor(
@@ -154,14 +209,16 @@ def test_step_with_outcomes_requires_a_postcondition() -> None:
         )
 
 
-def test_route_pattern_is_not_an_accepted_step_matcher() -> None:
+def test_output_present_is_not_a_step_matcher() -> None:
+    # output_present is verified against extracted outputs, not as a live step
+    # condition, so it is not accepted inside a step postcondition.
     steps = _steps()
     steps[1] = Step(
         id="s2",
         action=ClickAction(),
         target=TargetDescriptor(role="button", name="Search"),
         risk=RiskClass.READ_ONLY,
-        postcondition=Condition(route_pattern="/member/:id"),
+        postcondition=Condition(output_present="savings_balance"),
     )
-    with pytest.raises(ValidationError, match="not an accepted matcher"):
+    with pytest.raises(ValidationError, match="not accepted here"):
         _capability(steps=steps)

@@ -36,7 +36,8 @@
         "label": null,
         "text": null,
         "frame": "lc-workspace",
-        "table_cell": null
+        "table_cell": null,
+        "fallbacks": []
       },
       "risk": "read_only",
       "postcondition": null,
@@ -54,7 +55,8 @@
         "label": null,
         "text": null,
         "frame": "lc-workspace",
-        "table_cell": null
+        "table_cell": null,
+        "fallbacks": []
       },
       "risk": "read_only",
       "postcondition": {
@@ -96,7 +98,8 @@
         "table_cell": {
           "row_contains": "Share Savings",
           "column_header": "Current Balance"
-        }
+        },
+        "fallbacks": []
       },
       "risk": "read_only",
       "postcondition": null,

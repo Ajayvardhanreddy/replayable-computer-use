@@ -53,6 +53,9 @@ class ModelObservation(BaseModel):
     candidates: list[ModelCandidate]
     # Actions already completed this run, so the (stateless-per-call) model does not repeat.
     actions_taken: list[str] = Field(default_factory=list)
+    # Declared outputs already extracted this run, so the model declares success
+    # instead of re-extracting an output it already has.
+    obtained_outputs: list[str] = Field(default_factory=list)
     last_error: str | None = None
     steps_remaining: int
 

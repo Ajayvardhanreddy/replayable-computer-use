@@ -111,6 +111,7 @@ async def discover(
             route=obs.route,
             candidates=[_minimize(candidate) for candidate in obs.candidates],
             actions_taken=list(history),
+            obtained_outputs=sorted(obtained_outputs),
             last_error=last_error,
             steps_remaining=max_steps - step_index,
         )
@@ -156,6 +157,16 @@ async def discover(
             if consecutive_errors >= _STUCK_LIMIT:
                 stop_reason = "STUCK"
                 break
+            continue
+        if proposal.action is ProposedActionType.EXTRACT and proposal.output in obtained_outputs:
+            # Already obtained; re-extracting is not progress. Nudge toward declaring
+            # success without recording a duplicate step (bounded by max_steps).
+            last_error = (
+                f"output {proposal.output!r} already obtained; declare success "
+                "or extract a different declared output"
+            )
+            if evidence is not None:
+                evidence.write(step_rejected_event(run_id, "OUTPUT_ALREADY_OBTAINED"))
             continue
 
         heading_before: str | None = None

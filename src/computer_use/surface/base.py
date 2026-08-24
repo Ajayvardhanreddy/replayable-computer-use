@@ -43,7 +43,11 @@ class StructuralSnapshot(BaseModel):
 
 
 class SurfaceError(Exception):
-    """Base class for surface failures."""
+    """Base class for surface failures.
+
+    A Surface implementation raises only SurfaceError subtypes; provider-specific
+    driver exceptions never cross this boundary.
+    """
 
 
 class TargetNotFoundError(SurfaceError):
@@ -52,6 +56,16 @@ class TargetNotFoundError(SurfaceError):
 
 class TargetAmbiguousError(SurfaceError):
     """More than one element matched the target descriptor (fail closed)."""
+
+
+class SurfaceTransientError(SurfaceError):
+    """A transient runtime condition (e.g. a mid-navigation execution-context race)
+    that a bounded retry may recover from. Distinct from a hard driver failure."""
+
+
+class SurfaceDriverError(SurfaceError):
+    """An underlying automation-driver failure. Implementations translate
+    provider-specific exceptions into this rather than leaking them upward."""
 
 
 class Surface(Protocol):
@@ -68,6 +82,8 @@ class Surface(Protocol):
     async def wait_for_frame_url(self, fragment: str, timeout_ms: int = 5000) -> None: ...
     async def wait_for_text(self, text: str, timeout_ms: int = 5000) -> bool: ...
     async def has_text(self, text: str) -> bool: ...
+    async def has_heading(self, name: str) -> bool: ...
+    async def current_route(self) -> str: ...
     async def wait_settled(self) -> None: ...
     async def primary_heading(self) -> str | None: ...
     async def wait_for_heading_change(

@@ -24,6 +24,7 @@ from computer_use.model import (
     TableCellTarget,
     TargetDescriptor,
 )
+from computer_use.surface import PlaywrightSurface
 
 _SAFE_CLICKS = frozenset({"Search"})
 
@@ -107,4 +108,23 @@ async def test_replay_unknown_member_is_business_outcome(legacy_core_url: str) -
     )
     assert isinstance(result, BusinessOutcome)
     assert result.code == "MEMBER_NOT_FOUND"
+    assert result.model_calls == 0
+
+
+async def test_replay_recovers_from_slow_load(legacy_core_url: str) -> None:
+    # The slow scenario delays the profile load; bounded waiting absorbs it and replay
+    # still succeeds (a recoverable runtime condition, not a failure). Also exercises
+    # the caller-owned surface seam on a real browser session.
+    surface = PlaywrightSurface()
+    await surface.start()
+    try:
+        await surface.goto(f"{legacy_core_url}/?scenario=slow")  # activate the scenario cookie
+        result = await replay(
+            _capability(), {"member_number": "54321"}, legacy_core_url,
+            safe_clicks=_SAFE_CLICKS, surface=surface,
+        )
+    finally:
+        await surface.close()
+    assert isinstance(result, Success)
+    assert result.outputs["savings_balance"] == "312.45"
     assert result.model_calls == 0

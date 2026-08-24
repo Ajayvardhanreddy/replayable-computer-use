@@ -180,3 +180,58 @@ async def test_success_after_required_extraction_is_ratified() -> None:
     )
     assert outcome.stop_reason == "GOAL_REACHED"
     assert len(outcome.trace.steps) == 1  # the extract
+
+
+class _ReExtractThenSucceedModel:
+    """Extracts the same output twice (redundantly) before declaring success."""
+
+    provider = "fake"
+    model_id = "reextract"
+
+    def __init__(self) -> None:
+        self._calls = 0
+
+    async def decide(self, goal: GoalContext, observation: ModelObservation) -> ProposedAction:
+        self._calls += 1
+        if self._calls <= 2:
+            return ProposedAction(
+                action=ProposedActionType.EXTRACT, candidate_id="cell1", output="savings_balance"
+            )
+        return ProposedAction(action=ProposedActionType.DECLARE_SUCCESS)
+
+
+class _ObservationRecordingModel:
+    provider = "fake"
+    model_id = "recorder"
+
+    def __init__(self) -> None:
+        self.seen: list[list[str]] = []
+        self._calls = 0
+
+    async def decide(self, goal: GoalContext, observation: ModelObservation) -> ProposedAction:
+        self.seen.append(list(observation.obtained_outputs))
+        self._calls += 1
+        if self._calls == 1:
+            return ProposedAction(
+                action=ProposedActionType.EXTRACT, candidate_id="cell1", output="savings_balance"
+            )
+        return ProposedAction(action=ProposedActionType.DECLARE_SUCCESS)
+
+
+async def test_redundant_extract_of_obtained_output_is_not_recorded() -> None:
+    surface = _CellSurface()
+    outcome = await discover(
+        _ReExtractThenSucceedModel(), surface, _kernel(surface), _spec(), "http://localhost"
+    )
+    assert outcome.stop_reason == "GOAL_REACHED"
+    # the second (redundant) extract is nudged away, not executed or recorded
+    assert len(outcome.trace.steps) == 1
+
+
+async def test_obtained_outputs_is_surfaced_to_the_model() -> None:
+    model = _ObservationRecordingModel()
+    surface = _CellSurface()
+    outcome = await discover(model, surface, _kernel(surface), _spec(), "http://localhost")
+    assert outcome.stop_reason == "GOAL_REACHED"
+    assert model.seen[0] == []  # nothing obtained on the first turn
+    assert model.seen[1] == ["savings_balance"]  # after the extract, the model sees it

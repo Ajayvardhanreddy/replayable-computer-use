@@ -8,7 +8,8 @@ Resolution prefers semantic role/name locators over CSS.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from collections.abc import Awaitable
+from typing import Any, TypeVar, cast
 from urllib.parse import urlparse
 
 from playwright.async_api import (
@@ -29,7 +30,9 @@ from .base import (
     Candidate,
     Observation,
     StructuralSnapshot,
+    SurfaceDriverError,
     SurfaceError,
+    SurfaceTransientError,
     TargetAmbiguousError,
     TargetNotFoundError,
 )
@@ -121,6 +124,38 @@ _PRIMARY_HEADING_JS = """
 }
 """
 
+# Heading identity (h1/h2 primary text node, excluding child spans like a member id).
+_HEADING_TEXTS_JS = """
+() => {
+  const hs = [...document.querySelectorAll('h1,h2')];
+  return hs.map((h) => {
+    const t = h.childNodes[0];
+    return t ? (t.textContent || '').trim() : (h.innerText || '').trim();
+  });
+}
+"""
+
+# Narrow set of genuinely transient conditions worth a bounded retry (navigation races).
+_TRANSIENT_SIGNATURES = (
+    "execution context was destroyed",
+    "frame was detached",
+    "cannot find context with specified id",
+)
+
+_T = TypeVar("_T")
+
+
+def _is_transient(error: PlaywrightError) -> bool:
+    message = str(error).lower()
+    return any(signature in message for signature in _TRANSIENT_SIGNATURES)
+
+
+def _translate(error: PlaywrightError) -> SurfaceError:
+    """Map a provider error to a Surface-level error; nothing else crosses the seam."""
+    if _is_transient(error):
+        return SurfaceTransientError(str(error))
+    return SurfaceDriverError(str(error))
+
 
 class PlaywrightSurface:
     def __init__(self, *, headless: bool = True) -> None:
@@ -140,17 +175,27 @@ class PlaywrightSurface:
             raise SurfaceError("surface not started")
         return self._page
 
+    async def _act(self, awaitable: Awaitable[_T]) -> _T:
+        """Await a driver call, translating any provider error to a SurfaceError."""
+        try:
+            return await awaitable
+        except PlaywrightError as error:
+            raise _translate(error) from error
+
     async def goto(self, url: str) -> None:
-        await self._pg().goto(url, wait_until="networkidle")
+        await self._act(self._pg().goto(url, wait_until="networkidle"))
 
     async def _safe_eval(self, frame: Frame, script: str, arg: object = None) -> object:
-        # Retry through transient execution-context-destroyed errors while a frame navigates.
+        # Retry a genuinely transient navigation race under a bounded budget; a
+        # non-transient driver error is translated and raised immediately (no retry).
         for attempt in range(_EVAL_RETRIES):
             try:
                 return await frame.evaluate(script, arg)
-            except PlaywrightError:
+            except PlaywrightError as error:
+                if not _is_transient(error):
+                    raise SurfaceDriverError(str(error)) from error
                 if attempt == _EVAL_RETRIES - 1:
-                    raise
+                    raise SurfaceTransientError(str(error)) from error
                 await self._pg().wait_for_timeout(50)
         return None
 
@@ -210,14 +255,14 @@ class PlaywrightSurface:
             return len(await self._table_cell_values(target))
         total = 0
         for frame in self._frames(target):
-            total += await self._locator(frame, target).count()
+            total += await self._act(self._locator(frame, target).count())
         return total
 
     async def _unique_locator(self, target: TargetDescriptor) -> Locator:
         matches: list[Locator] = []
         for frame in self._frames(target):
             locator = self._locator(frame, target)
-            found = await locator.count()
+            found = await self._act(locator.count())
             if found > 1:
                 raise TargetAmbiguousError(f"{found} matches in frame {frame.name!r}")
             if found == 1:
@@ -229,10 +274,12 @@ class PlaywrightSurface:
         return matches[0]
 
     async def click(self, target: TargetDescriptor) -> None:
-        await (await self._unique_locator(target)).click()
+        locator = await self._unique_locator(target)
+        await self._act(locator.click())
 
     async def type_text(self, target: TargetDescriptor, text: str) -> None:
-        await (await self._unique_locator(target)).fill(text)
+        locator = await self._unique_locator(target)
+        await self._act(locator.fill(text))
 
     async def extract(self, target: TargetDescriptor) -> str:
         if target.table_cell is not None:
@@ -243,7 +290,7 @@ class PlaywrightSurface:
                 raise TargetAmbiguousError("multiple table cells matched")
             return values[0]
         locator = await self._unique_locator(target)
-        return (await locator.inner_text()).strip()
+        return (await self._act(locator.inner_text())).strip()
 
     async def capture(self) -> StructuralSnapshot:
         frames: list[str] = []
@@ -286,6 +333,16 @@ class PlaywrightSurface:
             if text in body:
                 return True
         return False
+
+    async def has_heading(self, name: str) -> bool:
+        for frame in self._pg().frames:
+            headings = cast(list[str], await self._safe_eval(frame, _HEADING_TEXTS_JS))
+            if name in headings:
+                return True
+        return False
+
+    async def current_route(self) -> str:
+        return urlparse(self._pg().url).path
 
     async def wait_settled(self) -> None:
         try:
