@@ -92,7 +92,8 @@ def _descriptor_from_candidate(candidate: Candidate) -> TargetDescriptor:
     if candidate.name:
         return TargetDescriptor(role=candidate.role, name=candidate.name, frame=candidate.frame)
     if candidate.text:
-        return TargetDescriptor(role=candidate.role, text=candidate.text, frame=candidate.frame)
+        # text is resolved by text alone; a role qualifier would be ignored downstream.
+        return TargetDescriptor(text=candidate.text, frame=candidate.frame)
     raise KernelRejection(RejectionCode.UNRESOLVABLE_CANDIDATE, candidate.id)
 
 

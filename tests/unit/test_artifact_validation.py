@@ -178,6 +178,22 @@ def test_output_present_nested_in_any_of_is_rejected() -> None:
         )
 
 
+def test_authored_outcome_must_be_business_outcome() -> None:
+    # recoverable is runtime behavior and hard failure is a Failure; neither is an
+    # authored per-step outcome, so the artifact rejects them.
+    with pytest.raises(ValidationError, match="must be a business_outcome"):
+        Outcome(
+            code="X",
+            outcome_class=OutcomeClass.RECOVERABLE,
+            detector=Condition(text_present="x"),
+        )
+
+
+def test_role_qualified_text_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="must not be qualified by a role"):
+        TargetDescriptor(role="cell", text="Current Balance")
+
+
 def test_target_identity_form_conflicts_are_rejected() -> None:
     with pytest.raises(ValidationError, match="table_cell target must not mix"):
         TargetDescriptor(

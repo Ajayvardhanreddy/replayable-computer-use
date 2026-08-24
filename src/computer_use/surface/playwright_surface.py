@@ -165,10 +165,13 @@ class PlaywrightSurface:
         self._page: Page | None = None
 
     async def start(self) -> None:
-        self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.launch(headless=self._headless)
-        context = await self._browser.new_context()
-        self._page = await context.new_page()
+        try:
+            self._pw = await async_playwright().start()
+            self._browser = await self._pw.chromium.launch(headless=self._headless)
+            context = await self._browser.new_context()
+            self._page = await context.new_page()
+        except PlaywrightError as error:
+            raise SurfaceDriverError(str(error)) from error
 
     def _pg(self) -> Page:
         if self._page is None:
@@ -297,7 +300,7 @@ class PlaywrightSurface:
         landmarks: list[str] = []
         for frame in self._pg().frames:
             frames.append(frame.name or "main")
-            landmarks.extend(cast(list[str], await frame.evaluate(_HEADINGS_JS)))
+            landmarks.extend(cast(list[str], await self._safe_eval(frame, _HEADINGS_JS)))
         return StructuralSnapshot(
             route=urlparse(self._pg().url).path, frames=frames, landmarks=landmarks
         )
@@ -373,10 +376,14 @@ class PlaywrightSurface:
         return None
 
     async def close(self) -> None:
-        if self._browser is not None:
-            await self._browser.close()
+        try:
+            if self._browser is not None:
+                await self._browser.close()
+            if self._pw is not None:
+                await self._pw.stop()
+        except PlaywrightError as error:
+            raise SurfaceDriverError(str(error)) from error
+        finally:
             self._browser = None
-        if self._pw is not None:
-            await self._pw.stop()
             self._pw = None
-        self._page = None
+            self._page = None

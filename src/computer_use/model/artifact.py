@@ -89,7 +89,11 @@ class TargetDescriptor(BaseModel):
                 raise ValueError("name and text are conflicting identity forms")
             return self
         if self.text is not None:
-            return self  # text, optionally qualified by role
+            # text is a standalone form: the surface resolves it by text, so a role
+            # qualifier here would be silently ignored (a contract mismatch).
+            if self.role is not None:
+                raise ValueError("a text target must not be qualified by a role")
+            return self
         raise ValueError(
             "TargetDescriptor requires one identity form: role+name, label, text, or table_cell"
         )
@@ -163,6 +167,15 @@ class Outcome(BaseModel):
     code: str
     outcome_class: OutcomeClass
     detector: Condition
+
+    @model_validator(mode="after")
+    def _only_business_outcome(self) -> Self:
+        # An authored step outcome is a business outcome. Recoverable conditions are
+        # deterministic replay runtime behavior, and hard failures are a Failure, so
+        # neither is expressible as a per-step authored outcome.
+        if self.outcome_class is not OutcomeClass.BUSINESS_OUTCOME:
+            raise ValueError("an authored step outcome must be a business_outcome")
+        return self
 
 
 class Step(BaseModel):

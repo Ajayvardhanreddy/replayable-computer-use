@@ -30,7 +30,13 @@ from computer_use.model import (
     TargetDescriptor,
     TypeAction,
 )
-from computer_use.surface import SurfaceDriverError, SurfaceTransientError
+from computer_use.surface import (
+    SurfaceDriverError,
+    SurfaceError,
+    SurfaceTransientError,
+    TargetAmbiguousError,
+    TargetNotFoundError,
+)
 
 _SAFE = frozenset({"Search"})
 
@@ -46,6 +52,8 @@ class _FakeSurface:
         counts: dict[str, int] | None = None,
         transient_before: int = 0,
         driver_on: str | None = None,
+        goto_error: SurfaceError | None = None,
+        click_error: SurfaceError | None = None,
     ) -> None:
         self.clicks: list[TargetDescriptor] = []
         self.types: list[tuple[str | None, str]] = []
@@ -56,6 +64,8 @@ class _FakeSurface:
         self._counts = counts or {}
         self._transient_before = transient_before
         self._driver_on = driver_on
+        self._goto_error = goto_error
+        self._click_error = click_error
 
     @staticmethod
     def _key(target: TargetDescriptor) -> str | None:
@@ -66,7 +76,11 @@ class _FakeSurface:
         return target.text or target.label
 
     async def start(self) -> None: ...
-    async def goto(self, url: str) -> None: ...
+
+    async def goto(self, url: str) -> None:
+        if self._goto_error is not None:
+            raise self._goto_error
+
     async def wait_settled(self) -> None: ...
 
     async def count(self, target: TargetDescriptor) -> int:
@@ -80,6 +94,8 @@ class _FakeSurface:
     async def click(self, target: TargetDescriptor) -> None:
         if self._driver_on == "click":
             raise SurfaceDriverError("driver crashed")
+        if self._click_error is not None:
+            raise self._click_error
         self.clicks.append(target)
 
     async def type_text(self, target: TargetDescriptor, text: str) -> None:
@@ -215,6 +231,28 @@ async def test_driver_error_becomes_typed_failure_not_exception() -> None:
     result = await _run(fake)
     assert isinstance(result, Failure)
     assert result.code is FailureCode.SURFACE_ERROR
+
+
+async def test_goto_failure_is_a_typed_failure_not_an_exception() -> None:
+    fake = _FakeSurface(goto_error=SurfaceDriverError("navigation failed"))
+    result = await _run(fake)
+    assert isinstance(result, Failure)
+    assert result.code is FailureCode.SURFACE_ERROR
+
+
+async def test_resolve_act_race_missing_target_is_typed() -> None:
+    # resolve counts 1, but the element vanishes before the click.
+    fake = _FakeSurface(click_error=TargetNotFoundError("element gone"))
+    result = await _run(fake)
+    assert isinstance(result, Failure)
+    assert result.code is FailureCode.TARGET_MISSING
+
+
+async def test_resolve_act_race_ambiguous_target_is_typed() -> None:
+    fake = _FakeSurface(click_error=TargetAmbiguousError("two matches now"))
+    result = await _run(fake)
+    assert isinstance(result, Failure)
+    assert result.code is FailureCode.LOCATOR_AMBIGUOUS
 
 
 async def test_locator_fallback_succeeds_when_primary_missing() -> None:

@@ -32,9 +32,10 @@ from computer_use.safety import Policy, RiskClassifier
 from computer_use.surface import (
     PlaywrightSurface,
     Surface,
-    SurfaceDriverError,
     SurfaceError,
     SurfaceTransientError,
+    TargetAmbiguousError,
+    TargetNotFoundError,
 )
 
 from .kernel import KernelExecution, KernelRejection, RejectionCode, TrustedKernel, ValueResolver
@@ -62,6 +63,29 @@ _REJECTION_TO_FAILURE = {
 
 def _failure_code(code: RejectionCode) -> FailureCode:
     return _REJECTION_TO_FAILURE.get(code, FailureCode.POLICY_DENIED)
+
+
+def _surface_failure(run_id: str, error: SurfaceError, step_id: str | None) -> Failure:
+    """Map any Surface-level error to a typed hard Failure; nothing raw escapes replay.
+
+    A resolve/act race (the DOM changes between count and click) surfaces as a
+    not-found or ambiguous target and is reported as such; everything else is a
+    driver failure or exhausted transient.
+    """
+    if isinstance(error, TargetNotFoundError):
+        code = FailureCode.TARGET_MISSING
+    elif isinstance(error, TargetAmbiguousError):
+        code = FailureCode.LOCATOR_AMBIGUOUS
+    else:
+        code = FailureCode.SURFACE_ERROR
+    return Failure(
+        run_id=run_id,
+        code=code,
+        step_id=step_id,
+        observed=(str(error)[:200] or "surface error"),
+        retryable=False,
+        model_calls=0,
+    )
 
 
 def _coerce_output(value: str, spec: OutputSpec | None) -> str:
@@ -184,95 +208,76 @@ async def replay(
     # caller owns its lifecycle; otherwise replay creates and closes its own.
     owns_surface = surface is None
     active: Surface = surface if surface is not None else PlaywrightSurface()
-    if owns_surface:
-        await active.start()
     try:
-        await active.goto(target_url.rstrip("/") + "/")
-        kernel = TrustedKernel(
-            active,
-            Policy(allowed_actions=_REPLAY_ACTIONS),
-            RiskClassifier(safe_click_names=safe_clicks),
-            ValueResolver(inputs),
-        )
-        outputs: dict[str, str] = {}
-        for step in capability.steps:
-            await active.wait_settled()
-            try:
-                execution = await _execute_step(kernel, step)
-                if step.output is not None and execution.extracted is not None:
-                    outputs[step.output] = _coerce_output(
-                        execution.extracted, capability.outputs.get(step.output)
-                    )
-                kind, code = await _resolve_step(active, step, resolve_timeout_ms)
-            except KernelRejection as rejection:
-                return Failure(
-                    run_id=run_id,
-                    code=_failure_code(rejection.code),
-                    step_id=step.id,
-                    observed=await _observe(active),
-                    retryable=False,
-                    model_calls=0,
-                )
-            except SurfaceDriverError as driver:
-                return Failure(
-                    run_id=run_id,
-                    code=FailureCode.SURFACE_ERROR,
-                    step_id=step.id,
-                    observed=str(driver)[:200],
-                    retryable=False,
-                    model_calls=0,
-                )
-            except SurfaceTransientError:  # bounded recovery exhausted -> typed failure
-                return Failure(
-                    run_id=run_id,
-                    code=FailureCode.SURFACE_ERROR,
-                    step_id=step.id,
-                    observed=await _observe(active),
-                    retryable=False,
-                    model_calls=0,
-                )
-            if kind == "outcome":
-                return BusinessOutcome(
-                    run_id=run_id, capability=capability.id, code=code or "", model_calls=0
-                )
-            if kind == "failed":
-                return Failure(
-                    run_id=run_id,
-                    code=FailureCode.CHECKPOINT_FAILED,
-                    step_id=step.id,
-                    expected=repr(step.postcondition),
-                    observed=await _observe(active),
-                    retryable=False,
-                    model_calls=0,
-                )
         try:
-            satisfied = await _success_satisfied(active, capability.success_checkpoint, outputs)
-        except SurfaceError as error:
+            if owns_surface:
+                await active.start()
+            await active.goto(target_url.rstrip("/") + "/")
+            kernel = TrustedKernel(
+                active,
+                Policy(allowed_actions=_REPLAY_ACTIONS),
+                RiskClassifier(safe_click_names=safe_clicks),
+                ValueResolver(inputs),
+            )
+            outputs: dict[str, str] = {}
+            for step in capability.steps:
+                await active.wait_settled()
+                try:
+                    execution = await _execute_step(kernel, step)
+                    if step.output is not None and execution.extracted is not None:
+                        outputs[step.output] = _coerce_output(
+                            execution.extracted, capability.outputs.get(step.output)
+                        )
+                    kind, code = await _resolve_step(active, step, resolve_timeout_ms)
+                except KernelRejection as rejection:
+                    return Failure(
+                        run_id=run_id,
+                        code=_failure_code(rejection.code),
+                        step_id=step.id,
+                        observed=await _observe(active),
+                        retryable=False,
+                        model_calls=0,
+                    )
+                except SurfaceError as error:
+                    # Driver failure, exhausted transient, or a mid-act target race.
+                    return _surface_failure(run_id, error, step.id)
+                if kind == "outcome":
+                    return BusinessOutcome(
+                        run_id=run_id, capability=capability.id, code=code or "", model_calls=0
+                    )
+                if kind == "failed":
+                    return Failure(
+                        run_id=run_id,
+                        code=FailureCode.CHECKPOINT_FAILED,
+                        step_id=step.id,
+                        expected=repr(step.postcondition),
+                        observed=await _observe(active),
+                        retryable=False,
+                        model_calls=0,
+                    )
+            if await _success_satisfied(active, capability.success_checkpoint, outputs):
+                return Success(
+                    run_id=run_id,
+                    capability=capability.id,
+                    version=capability.version,
+                    outputs=outputs,
+                    model_calls=0,
+                )
             return Failure(
                 run_id=run_id,
-                code=FailureCode.SURFACE_ERROR,
+                code=FailureCode.CHECKPOINT_FAILED,
                 step_id=None,
-                observed=str(error)[:200],
+                expected=repr(capability.success_checkpoint),
+                observed=await _observe(active),
                 retryable=False,
                 model_calls=0,
             )
-        if satisfied:
-            return Success(
-                run_id=run_id,
-                capability=capability.id,
-                version=capability.version,
-                outputs=outputs,
-                model_calls=0,
-            )
-        return Failure(
-            run_id=run_id,
-            code=FailureCode.CHECKPOINT_FAILED,
-            step_id=None,
-            expected=repr(capability.success_checkpoint),
-            observed=await _observe(active),
-            retryable=False,
-            model_calls=0,
-        )
+        except SurfaceError as error:
+            # start / goto / success-check errors not tied to a specific step.
+            return _surface_failure(run_id, error, None)
     finally:
         if owns_surface:
-            await active.close()
+            try:
+                await active.close()
+            except SurfaceError:
+                pass  # a close error must never mask the RunResult

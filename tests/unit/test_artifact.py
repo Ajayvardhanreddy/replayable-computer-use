@@ -65,7 +65,7 @@ def build_capability() -> Capability:
             Step(
                 id="extract_balance",
                 action=ExtractAction(),
-                target=TargetDescriptor(role="cell", text="Current Balance"),
+                target=TargetDescriptor(text="Current Balance"),
                 risk=RiskClass.READ_ONLY,
                 output="savings_balance",
             ),
