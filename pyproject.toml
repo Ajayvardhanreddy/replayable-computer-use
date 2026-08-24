@@ -1,7 +1,7 @@
 [project]
 name = "computer-use"
 dynamic = ["version"]
-description = "LLM-discovered, typed computer-use capabilities with deterministic replay, safety guardrails, and same-session human handoff for legacy banking UIs."
+description = "LLM-discovered, typed computer-use capabilities that replay deterministically against legacy banking UIs, with a software-owned trust boundary and safety guardrails."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
