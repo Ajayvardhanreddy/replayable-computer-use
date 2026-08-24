@@ -1,15 +1,17 @@
 """Deterministic replay: execute a compiled Capability with no model in the loop.
 
 Replay drives the same TrustedKernel as discovery. It never constructs or calls a
-discovery model, so the reported model_calls is always 0. After a step it races the
-step's declared business outcomes against its checkpoint: a matching outcome detector
-returns a BusinessOutcome (a legitimate domain answer), a satisfied checkpoint
-continues, and neither within the timeout is a hard CHECKPOINT_FAILED.
+discovery model, so the reported model_calls is always 0. Runtime conditions are
+handled deliberately: a transient surface condition is retried under a bounded
+budget, a declared business outcome is a legitimate domain answer, a satisfied
+checkpoint continues, and anything else stops with a typed Failure. No raw driver
+exception crosses this boundary.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 from uuid import uuid4
 
 from computer_use.model import (
@@ -17,6 +19,7 @@ from computer_use.model import (
     Capability,
     Condition,
     Failure,
+    FailureCode,
     OutcomeClass,
     OutputSpec,
     ParamType,
@@ -26,14 +29,37 @@ from computer_use.model import (
     Success,
 )
 from computer_use.safety import Policy, RiskClassifier
-from computer_use.surface import PlaywrightSurface, Surface
+from computer_use.surface import (
+    PlaywrightSurface,
+    Surface,
+    SurfaceDriverError,
+    SurfaceError,
+    SurfaceTransientError,
+)
 
-from .kernel import KernelRejection, TrustedKernel, ValueResolver
+from .kernel import KernelExecution, KernelRejection, RejectionCode, TrustedKernel, ValueResolver
 
 _REPLAY_ACTIONS = frozenset(
     {ProposedActionType.CLICK, ProposedActionType.TYPE, ProposedActionType.EXTRACT}
 )
 _RESOLVE_TIMEOUT_MS = 5000
+# Bounded recovery for a classified transient surface condition.
+_TRANSIENT_RETRIES = 3
+_RETRY_BACKOFF_MS = 200
+
+# Kernel authorization rejections mapped to the public failure taxonomy. Codes that
+# a statically-validated artifact cannot reach (missing value/output, non-executable)
+# default to POLICY_DENIED: the kernel refused to authorize the step.
+_REJECTION_TO_FAILURE = {
+    RejectionCode.TARGET_MISSING: FailureCode.TARGET_MISSING,
+    RejectionCode.LOCATOR_AMBIGUOUS: FailureCode.LOCATOR_AMBIGUOUS,
+    RejectionCode.POLICY_DENIED: FailureCode.POLICY_DENIED,
+    RejectionCode.RISK_CONFIRMATION_REQUIRED: FailureCode.POLICY_DENIED,
+}
+
+
+def _failure_code(code: RejectionCode) -> FailureCode:
+    return _REJECTION_TO_FAILURE.get(code, FailureCode.POLICY_DENIED)
 
 
 def _coerce_output(value: str, spec: OutputSpec | None) -> str:
@@ -42,35 +68,105 @@ def _coerce_output(value: str, spec: OutputSpec | None) -> str:
     return value
 
 
+def _route_matches(pattern: str, path: str) -> bool:
+    """Match a URL path against a narrow deterministic pattern.
+
+    Literal segments are escaped; a ``:param`` placeholder matches exactly one path
+    segment. The whole pattern is anchored. No artifact-supplied regex is honored.
+    """
+    parts: list[str] = []
+    for segment in pattern.split("/"):
+        if segment.startswith(":") and len(segment) > 1:
+            parts.append(r"[^/]+")
+        else:
+            parts.append(re.escape(segment))
+    return re.fullmatch("/".join(parts), path) is not None
+
+
 async def _matches(surface: Surface, condition: Condition) -> bool:
+    """Evaluate a live condition. Every set matcher is required (AND); ``any_of`` is
+    an OR subgroup. Unsupported matchers raise rather than silently returning False."""
+    checks: list[bool] = []
     if condition.text_present is not None:
-        return await surface.has_text(condition.text_present)
+        checks.append(await surface.has_text(condition.text_present))
     if condition.heading is not None:
-        return await surface.has_text(condition.heading.name)
+        checks.append(await surface.has_heading(condition.heading.name))
+    if condition.route_pattern is not None:
+        checks.append(_route_matches(condition.route_pattern, await surface.current_route()))
     if condition.any_of is not None:
-        for sub_condition in condition.any_of:
-            if await _matches(surface, sub_condition):
-                return True
-    return False
+        checks.append(any([await _matches(surface, sub) for sub in condition.any_of]))
+    if condition.output_present is not None:
+        raise ValueError("output_present is a success-checkpoint matcher, not a live condition")
+    if not checks:
+        raise ValueError("condition has no evaluable matcher")
+    return all(checks)
 
 
-async def _resolve_step(surface: Surface, step: Step) -> tuple[str, str | None]:
-    """Race the step's business outcomes against its checkpoint after execution."""
+async def _success_satisfied(
+    surface: Surface, checkpoint: Condition, outputs: dict[str, str]
+) -> bool:
+    if checkpoint.output_present is not None and checkpoint.output_present not in outputs:
+        return False
+    has_live = (
+        checkpoint.text_present is not None
+        or checkpoint.heading is not None
+        or checkpoint.route_pattern is not None
+        or checkpoint.any_of is not None
+    )
+    if has_live:
+        live = checkpoint.model_copy(update={"output_present": None})
+        if not await _matches(surface, live):
+            return False
+    return True
+
+
+async def _observe(surface: Surface) -> str:
+    """A short, structural description of the current state for failure diagnostics."""
+    try:
+        heading = await surface.primary_heading()
+        route = await surface.current_route()
+    except SurfaceError:
+        return "observed state unavailable"
+    return f"heading={heading!r} route={route!r}"
+
+
+async def _resolve_step(surface: Surface, step: Step, timeout_ms: int) -> tuple[str, str | None]:
+    """Race the step's business outcomes against its checkpoint after execution.
+
+    A transient condition during polling is treated as not-yet-settled and the poll
+    continues within the budget; a non-transient surface error propagates.
+    """
     if not step.outcomes and step.postcondition is None:
         return ("continue", None)
     waited = 0
     while True:
-        for outcome in step.outcomes:
-            if outcome.outcome_class is OutcomeClass.BUSINESS_OUTCOME and await _matches(
-                surface, outcome.detector
-            ):
-                return ("outcome", outcome.code)
-        if step.postcondition is None or await _matches(surface, step.postcondition):
-            return ("continue", None)
-        if waited >= _RESOLVE_TIMEOUT_MS:
+        try:
+            for outcome in step.outcomes:
+                if outcome.outcome_class is OutcomeClass.BUSINESS_OUTCOME and await _matches(
+                    surface, outcome.detector
+                ):
+                    return ("outcome", outcome.code)
+            if step.postcondition is None or await _matches(surface, step.postcondition):
+                return ("continue", None)
+        except SurfaceTransientError:
+            pass  # mid-navigation; keep polling within budget
+        if waited >= timeout_ms:
             return ("failed", None)
         await asyncio.sleep(0.1)
         waited += 100
+
+
+async def _execute_step(kernel: TrustedKernel, step: Step) -> KernelExecution:
+    """Execute a step, retrying only a classified transient condition within budget."""
+    last: SurfaceTransientError | None = None
+    for _ in range(_TRANSIENT_RETRIES):
+        try:
+            return await kernel.execute_step(step)
+        except SurfaceTransientError as transient:
+            last = transient
+            await asyncio.sleep(_RETRY_BACKOFF_MS / 1000)
+    assert last is not None
+    raise last
 
 
 async def replay(
@@ -78,36 +174,61 @@ async def replay(
     inputs: dict[str, str],
     target_url: str,
     safe_clicks: frozenset[str] = frozenset(),
+    surface: Surface | None = None,
+    resolve_timeout_ms: int = _RESOLVE_TIMEOUT_MS,
 ) -> RunResult:
     run_id = f"run_{uuid4().hex[:8]}"
-    surface = PlaywrightSurface()
-    await surface.start()
+    # Caller-owned session (the human-handoff seam): if a surface is injected the
+    # caller owns its lifecycle; otherwise replay creates and closes its own.
+    owns_surface = surface is None
+    active: Surface = surface if surface is not None else PlaywrightSurface()
+    if owns_surface:
+        await active.start()
     try:
-        await surface.goto(target_url.rstrip("/") + "/")
+        await active.goto(target_url.rstrip("/") + "/")
         kernel = TrustedKernel(
-            surface,
+            active,
             Policy(allowed_actions=_REPLAY_ACTIONS),
             RiskClassifier(safe_click_names=safe_clicks),
             ValueResolver(inputs),
         )
         outputs: dict[str, str] = {}
         for step in capability.steps:
-            await surface.wait_settled()
+            await active.wait_settled()
             try:
-                execution = await kernel.execute_step(step)
+                execution = await _execute_step(kernel, step)
+                if step.output is not None and execution.extracted is not None:
+                    outputs[step.output] = _coerce_output(
+                        execution.extracted, capability.outputs.get(step.output)
+                    )
+                kind, code = await _resolve_step(active, step, resolve_timeout_ms)
             except KernelRejection as rejection:
                 return Failure(
                     run_id=run_id,
-                    code=rejection.code.value,
+                    code=_failure_code(rejection.code),
                     step_id=step.id,
+                    observed=await _observe(active),
                     retryable=False,
                     model_calls=0,
                 )
-            if step.output is not None and execution.extracted is not None:
-                outputs[step.output] = _coerce_output(
-                    execution.extracted, capability.outputs.get(step.output)
+            except SurfaceDriverError as driver:
+                return Failure(
+                    run_id=run_id,
+                    code=FailureCode.SURFACE_ERROR,
+                    step_id=step.id,
+                    observed=str(driver)[:200],
+                    retryable=False,
+                    model_calls=0,
                 )
-            kind, code = await _resolve_step(surface, step)
+            except SurfaceTransientError:  # bounded recovery exhausted -> typed failure
+                return Failure(
+                    run_id=run_id,
+                    code=FailureCode.SURFACE_ERROR,
+                    step_id=step.id,
+                    observed=await _observe(active),
+                    retryable=False,
+                    model_calls=0,
+                )
             if kind == "outcome":
                 return BusinessOutcome(
                     run_id=run_id, capability=capability.id, code=code or "", model_calls=0
@@ -115,14 +236,25 @@ async def replay(
             if kind == "failed":
                 return Failure(
                     run_id=run_id,
-                    code="CHECKPOINT_FAILED",
+                    code=FailureCode.CHECKPOINT_FAILED,
                     step_id=step.id,
                     expected=repr(step.postcondition),
+                    observed=await _observe(active),
                     retryable=False,
                     model_calls=0,
                 )
-        expected_output = capability.success_checkpoint.output_present
-        if expected_output is not None and expected_output in outputs:
+        try:
+            satisfied = await _success_satisfied(active, capability.success_checkpoint, outputs)
+        except SurfaceError as error:
+            return Failure(
+                run_id=run_id,
+                code=FailureCode.SURFACE_ERROR,
+                step_id=None,
+                observed=str(error)[:200],
+                retryable=False,
+                model_calls=0,
+            )
+        if satisfied:
             return Success(
                 run_id=run_id,
                 capability=capability.id,
@@ -132,11 +264,13 @@ async def replay(
             )
         return Failure(
             run_id=run_id,
-            code="CHECKPOINT_FAILED",
+            code=FailureCode.CHECKPOINT_FAILED,
             step_id=None,
-            expected=f"output '{expected_output}' present",
+            expected=repr(capability.success_checkpoint),
+            observed=await _observe(active),
             retryable=False,
             model_calls=0,
         )
     finally:
-        await surface.close()
+        if owns_surface:
+            await active.close()

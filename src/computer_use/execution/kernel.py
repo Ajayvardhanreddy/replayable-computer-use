@@ -158,27 +158,39 @@ class TrustedKernel:
         if action is ProposedActionType.EXTRACT and not output:
             raise KernelRejection(RejectionCode.MISSING_OUTPUT)
 
-        # Software-owned risk classification and gate, before any side effect.
-        risk = self._classifier.classify(action, target)
+        # Resolve the primary, then ordered fallbacks. Ambiguity fails closed and is
+        # never dodged by falling through to a lower-priority locator.
+        resolved = await self._resolve_target(target)
+
+        # Software-owned risk classification, on the control actually resolved,
+        # before any side effect.
+        risk = self._classifier.classify(action, resolved)
         if risk is not RiskClass.READ_ONLY:
             raise KernelRejection(RejectionCode.RISK_CONFIRMATION_REQUIRED, risk.value)
-
-        # Ambiguity fails closed.
-        matches = await self._surface.count(target)
-        if matches == 0:
-            raise KernelRejection(RejectionCode.TARGET_MISSING)
-        if matches > 1:
-            raise KernelRejection(RejectionCode.LOCATOR_AMBIGUOUS, str(matches))
 
         # Execute.
         extracted: str | None = None
         if action is ProposedActionType.CLICK:
-            await self._surface.click(target)
+            await self._surface.click(resolved)
         elif action is ProposedActionType.TYPE:
             assert value is not None
-            await self._surface.type_text(target, self._values.resolve(value))
+            await self._surface.type_text(resolved, self._values.resolve(value))
         else:  # EXTRACT
-            extracted = await self._surface.extract(target)
+            extracted = await self._surface.extract(resolved)
         return KernelExecution(
-            action=action, target=target, risk=risk, value=value, extracted=extracted
+            action=action, target=resolved, risk=risk, value=value, extracted=extracted
         )
+
+    async def _resolve_target(self, target: TargetDescriptor) -> TargetDescriptor:
+        """Resolve the primary then ordered fallbacks to a uniquely-matching descriptor.
+
+        Exactly one match -> use it. More than one -> LOCATOR_AMBIGUOUS immediately
+        (never dodged). Zero -> try the next fallback. None matched -> TARGET_MISSING.
+        """
+        for descriptor in (target, *target.fallbacks):
+            matches = await self._surface.count(descriptor)
+            if matches > 1:
+                raise KernelRejection(RejectionCode.LOCATOR_AMBIGUOUS, str(matches))
+            if matches == 1:
+                return descriptor
+        raise KernelRejection(RejectionCode.TARGET_MISSING)

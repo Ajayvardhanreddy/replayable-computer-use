@@ -154,14 +154,16 @@ def test_step_with_outcomes_requires_a_postcondition() -> None:
         )
 
 
-def test_route_pattern_is_not_an_accepted_step_matcher() -> None:
+def test_output_present_is_not_a_step_matcher() -> None:
+    # output_present is verified against extracted outputs, not as a live step
+    # condition, so it is not accepted inside a step postcondition.
     steps = _steps()
     steps[1] = Step(
         id="s2",
         action=ClickAction(),
         target=TargetDescriptor(role="button", name="Search"),
         risk=RiskClass.READ_ONLY,
-        postcondition=Condition(route_pattern="/member/:id"),
+        postcondition=Condition(output_present="savings_balance"),
     )
-    with pytest.raises(ValidationError, match="not an accepted matcher"):
+    with pytest.raises(ValidationError, match="not accepted here"):
         _capability(steps=steps)

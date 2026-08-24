@@ -7,7 +7,9 @@ from .base import (
     Observation,
     StructuralSnapshot,
     Surface,
+    SurfaceDriverError,
     SurfaceError,
+    SurfaceTransientError,
     TargetAmbiguousError,
     TargetNotFoundError,
 )
@@ -19,7 +21,9 @@ __all__ = [
     "PlaywrightSurface",
     "StructuralSnapshot",
     "Surface",
+    "SurfaceDriverError",
     "SurfaceError",
+    "SurfaceTransientError",
     "TargetAmbiguousError",
     "TargetNotFoundError",
 ]

@@ -56,6 +56,18 @@ class TargetDescriptor(BaseModel):
     text: str | None = None
     frame: str | None = None
     table_cell: TableCellTarget | None = None
+    # Ordered deterministic fallbacks tried only when the primary resolves to zero
+    # matches. Each fallback is itself a single-identity descriptor; fallbacks are
+    # depth-1 (a fallback carries no fallbacks of its own). Ambiguity is never
+    # dodged: a locator that matches more than once fails closed instead.
+    fallbacks: list[TargetDescriptor] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _fallbacks_are_depth_one(self) -> Self:
+        for fallback in self.fallbacks:
+            if fallback.fallbacks:
+                raise ValueError("locator fallbacks must not be nested (depth-1 only)")
+        return self
 
     @model_validator(mode="after")
     def _single_identity_form(self) -> Self:
@@ -81,6 +93,9 @@ class TargetDescriptor(BaseModel):
         raise ValueError(
             "TargetDescriptor requires one identity form: role+name, label, text, or table_cell"
         )
+
+
+TargetDescriptor.model_rebuild()  # resolve the self-referential `fallbacks` field
 
 
 class ObserveAction(BaseModel):
@@ -177,13 +192,13 @@ class Step(BaseModel):
         if action_type != "extract" and self.output is not None:
             raise ValueError("'output' is only valid for an extract action")
         # A table_cell is a relational read; the current adapter resolves it for
-        # extract only, never as a click/type target.
-        if (
-            self.target is not None
-            and self.target.table_cell is not None
-            and action_type != "extract"
-        ):
-            raise ValueError(f"table_cell target is only valid for extract, not '{action_type}'")
+        # extract only, never as a click/type target. Applies to every fallback too.
+        if self.target is not None and action_type != "extract":
+            for descriptor in (self.target, *self.target.fallbacks):
+                if descriptor.table_cell is not None:
+                    raise ValueError(
+                        f"table_cell target is only valid for extract, not '{action_type}'"
+                    )
         # A step with authored alternative outcomes must also define its normal
         # path, so the successful branch is explicit rather than implied.
         if self.outcomes and self.postcondition is None:
@@ -218,11 +233,13 @@ class CapabilityTarget(BaseModel):
     application_family: str
 
 
-# Matchers that a step postcondition / outcome detector may use as a live DOM
-# condition. `output_present` is a success-checkpoint-only matcher; `route_pattern`
-# is not an accepted matcher in this artifact contract.
-_STEP_MATCHERS = frozenset({"text_present", "heading", "any_of"})
-_SUCCESS_MATCHERS = frozenset({"text_present", "heading", "any_of", "output_present"})
+# Matchers a step postcondition / outcome detector may use as a live condition.
+# `output_present` is a success-checkpoint-only matcher (verified against extracted
+# outputs, not the live surface), so it is excluded from step conditions.
+_STEP_MATCHERS = frozenset({"text_present", "heading", "route_pattern", "any_of"})
+_SUCCESS_MATCHERS = frozenset(
+    {"text_present", "heading", "route_pattern", "any_of", "output_present"}
+)
 
 
 def _parameter_names(value: ValueRef) -> set[str]:
@@ -257,10 +274,7 @@ def _matchers_used(condition: Condition) -> set[str]:
 def _forbid_matchers(condition: Condition, allowed: frozenset[str], where: str) -> None:
     extra = _matchers_used(condition) - allowed
     if extra:
-        raise ValueError(
-            f"{where}: matcher(s) {sorted(extra)} are not accepted here "
-            "(route_pattern is not an accepted matcher in this artifact contract)"
-        )
+        raise ValueError(f"{where}: matcher(s) {sorted(extra)} are not accepted here")
 
 
 class Capability(BaseModel):
