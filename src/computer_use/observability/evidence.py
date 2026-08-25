@@ -14,6 +14,7 @@ from computer_use.execution import KernelExecution
 from computer_use.model import (
     Capability,
     EvidenceEvent,
+    Failure,
     ParameterRef,
     RunResult,
     SafeLiteral,
@@ -152,4 +153,10 @@ def persistable_result(result: RunResult, capability: Capability) -> dict[str, o
             spec = specs.get(name)
             masked[name] = _SENSITIVITY_MASK.get(spec.sensitivity, value) if spec else value
         data["outputs"] = masked
+    if isinstance(result, Failure):
+        # Persist only the stable structural signal (code + step id). Free-text
+        # expected/observed can carry a raw value; richer diagnostics come from the
+        # separately sanitized FailureEvidence.
+        data.pop("expected", None)
+        data.pop("observed", None)
     return data

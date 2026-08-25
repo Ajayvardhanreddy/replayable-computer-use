@@ -20,7 +20,7 @@ from computer_use.model import (
     Success,
 )
 from computer_use.observability import EvidenceStore
-from computer_use.safety import Policy, RiskClassifier
+from computer_use.safety import NavigationPolicy, Policy, RiskClassifier
 from computer_use.surface import PlaywrightSurface
 
 _ALLOWED = frozenset(
@@ -87,7 +87,7 @@ def _spec() -> GoalSpec:
 
 
 async def test_fake_model_discovery_compiles_and_replays(
-    legacy_core_url: str, tmp_path: Path
+    legacy_core_url: str, nav_policy: NavigationPolicy, tmp_path: Path
 ) -> None:
     evidence_path = tmp_path / "discovery.jsonl"
     store = EvidenceStore(evidence_path)
@@ -103,7 +103,8 @@ async def test_fake_model_discovery_compiles_and_replays(
             ValueResolver({"member_number": "12345"}),
         )
         outcome = await discover(
-            FakeDiscoveryModel(), surface, kernel, spec, legacy_core_url, evidence=store
+            FakeDiscoveryModel(), surface, kernel, spec, legacy_core_url,
+            nav_policy=nav_policy, evidence=store,
         )
     finally:
         await surface.close()
@@ -122,7 +123,8 @@ async def test_fake_model_discovery_compiles_and_replays(
 
     # Deterministic replay of the discovered artifact with a different member, no model.
     result = await replay(
-        capability, {"member_number": "54321"}, legacy_core_url, safe_clicks=_SAFE_CLICKS
+        capability, {"member_number": "54321"}, legacy_core_url,
+        nav_policy=nav_policy, safe_clicks=_SAFE_CLICKS,
     )
     assert isinstance(result, Success)
     assert result.outputs["savings_balance"] == "312.45"

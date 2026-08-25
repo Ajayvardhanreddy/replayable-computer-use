@@ -32,6 +32,7 @@ from computer_use.safety import (
     NavigationPolicy,
     Policy,
     RiskClassifier,
+    SecretProvider,
     route_label,
     route_matches,
 )
@@ -106,7 +107,9 @@ def _nav_denied(
             run_id=run_id,
             code=FailureCode.POLICY_DENIED,
             step_id=step_id,
-            observed=f"navigation out of scope: {decision.reason}",
+            # Structural rule only. The raw reason embeds the concrete URL/path (a
+            # member id), so it must not reach a persisted failure.
+            observed=f"navigation denied: {decision.rule}",
             retryable=False,
             model_calls=0,
         )
@@ -213,40 +216,42 @@ async def replay(
     capability: Capability,
     inputs: dict[str, str],
     target_url: str,
+    *,
+    nav_policy: NavigationPolicy,
     safe_clicks: frozenset[str] = frozenset(),
     surface: Surface | None = None,
     resolve_timeout_ms: int = _RESOLVE_TIMEOUT_MS,
-    nav_policy: NavigationPolicy | None = None,
+    secrets: SecretProvider | None = None,
 ) -> RunResult:
     run_id = f"run_{uuid4().hex[:8]}"
     # Caller-owned session (the human-handoff seam): if a surface is injected the
     # caller owns its lifecycle; otherwise replay creates and closes its own.
     owns_surface = surface is None
     active: Surface = surface if surface is not None else PlaywrightSurface()
-    routes = nav_policy.allowed_routes if nav_policy is not None else frozenset()
+    # Navigation scope is mandatory and fail-closed: the allowlist is trusted
+    # configuration supplied by the caller, never derived from target_url.
+    routes = nav_policy.allowed_routes
     try:
         try:
             if owns_surface:
                 await active.start()
             entry = target_url.rstrip("/") + "/"
-            if nav_policy is not None:
-                denied = _nav_denied(run_id, nav_policy, entry, None)
-                if denied is not None:
-                    return denied
+            denied = _nav_denied(run_id, nav_policy, entry, None)
+            if denied is not None:
+                return denied
             await active.goto(entry)
             kernel = TrustedKernel(
                 active,
                 Policy(allowed_actions=_REPLAY_ACTIONS),
                 RiskClassifier(safe_click_names=safe_clicks),
-                ValueResolver(inputs),
+                ValueResolver(inputs, secrets),
             )
             outputs: dict[str, str] = {}
             for step in capability.steps:
                 await active.wait_settled()
-                if nav_policy is not None:
-                    denied = _nav_denied(run_id, nav_policy, await active.current_url(), step.id)
-                    if denied is not None:
-                        return denied
+                denied = _nav_denied(run_id, nav_policy, await active.current_url(), step.id)
+                if denied is not None:
+                    return denied
                 try:
                     execution = await _execute_step(kernel, step)
                     if step.output is not None and execution.extracted is not None:
@@ -255,11 +260,10 @@ async def replay(
                         )
                     # An action may navigate; re-check scope on the resulting page
                     # before reading it for an outcome or checkpoint.
-                    if nav_policy is not None:
-                        await active.wait_settled()
-                        post = _nav_denied(run_id, nav_policy, await active.current_url(), step.id)
-                        if post is not None:
-                            return post
+                    await active.wait_settled()
+                    post = _nav_denied(run_id, nav_policy, await active.current_url(), step.id)
+                    if post is not None:
+                        return post
                     kind, code = await _resolve_step(active, step, resolve_timeout_ms)
                 except KernelRejection as rejection:
                     return Failure(
@@ -287,10 +291,9 @@ async def replay(
                         retryable=False,
                         model_calls=0,
                     )
-            if nav_policy is not None:
-                denied = _nav_denied(run_id, nav_policy, await active.current_url(), None)
-                if denied is not None:
-                    return denied
+            denied = _nav_denied(run_id, nav_policy, await active.current_url(), None)
+            if denied is not None:
+                return denied
             if await _success_satisfied(active, capability.success_checkpoint, outputs):
                 return Success(
                     run_id=run_id,

@@ -2,11 +2,15 @@ import socket
 import threading
 import time
 from collections.abc import Iterator
+from urllib.parse import urlsplit
 
 import pytest
 import uvicorn
 
+from computer_use.safety import NavigationPolicy
 from legacy_core.app import app
+
+_ROUTES = frozenset({"/", "/workspace/inquiry", "/workspace/member/:member_number"})
 
 
 def _free_port() -> int:
@@ -32,3 +36,14 @@ def legacy_core_url() -> Iterator[str]:
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+
+
+@pytest.fixture
+def nav_policy(legacy_core_url: str) -> NavigationPolicy:
+    """A navigation scope for the ephemeral test origin (safe to derive here: the
+    test controls its own target)."""
+    parts = urlsplit(legacy_core_url)
+    return NavigationPolicy(
+        allowed_origins=frozenset({f"{parts.scheme}://{parts.netloc}"}),
+        allowed_routes=_ROUTES,
+    )
