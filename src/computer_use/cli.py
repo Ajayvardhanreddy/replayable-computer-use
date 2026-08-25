@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import typer
 from pydantic import ValidationError
@@ -17,17 +18,25 @@ from computer_use.model import (
     Capability,
     CapabilityTarget,
     Condition,
+    Failure,
     InputSpec,
     Outcome,
     OutcomeClass,
     OutputSpec,
     ParamType,
     ProposedActionType,
+    RunResult,
     Sensitivity,
     TargetDescriptor,
 )
-from computer_use.observability import EvidenceStore
-from computer_use.safety import Policy, RiskClassifier
+from computer_use.observability import (
+    EvidenceCollector,
+    EvidencePolicy,
+    EvidenceStore,
+    FailureEvidence,
+    persistable_result,
+)
+from computer_use.safety import NavigationPolicy, Policy, RiskClassifier
 from computer_use.surface import PlaywrightSurface
 
 app = typer.Typer(add_completion=False, help="Computer-use discovery and replay.")
@@ -37,6 +46,14 @@ _ALLOWED = frozenset(
 )
 # Explicit known-safe read-only click for this capability (a member lookup).
 _SAFE_CLICKS = frozenset({"Search"})
+# The routes this capability is scoped to on the target host.
+_ALLOWED_ROUTES = frozenset({"/", "/workspace/inquiry", "/workspace/member/:member_number"})
+
+
+def _nav_policy(target: str) -> NavigationPolicy:
+    parts = urlsplit(target)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    return NavigationPolicy(allowed_origins=frozenset({origin}), allowed_routes=_ALLOWED_ROUTES)
 
 
 def _capability_a_spec(goal: str) -> GoalSpec:
@@ -90,7 +107,13 @@ async def _run_discover(
             ValueResolver(inputs),
         )
         outcome = await discover(
-            AnthropicDiscoveryModel(model=model_id), surface, kernel, spec, target, evidence=store
+            AnthropicDiscoveryModel(model=model_id),
+            surface,
+            kernel,
+            spec,
+            target,
+            evidence=store,
+            nav_policy=_nav_policy(target),
         )
     finally:
         await surface.close()
@@ -129,11 +152,39 @@ def discover_command(
     raise typer.Exit(code=code)
 
 
+async def _run_replay(
+    capability: Capability, params: dict[str, str], target: str
+) -> tuple[RunResult, FailureEvidence | None]:
+    # The CLI owns the session (Playwright injection seam) so, on failure, it can
+    # collect sanitized structural evidence from the still-open surface.
+    surface = PlaywrightSurface()
+    await surface.start()
+    try:
+        result = await replay(
+            capability,
+            params,
+            target,
+            safe_clicks=_SAFE_CLICKS,
+            surface=surface,
+            nav_policy=_nav_policy(target),
+        )
+        failure_evidence: FailureEvidence | None = None
+        if isinstance(result, Failure):
+            collector = EvidenceCollector(EvidencePolicy(), _ALLOWED_ROUTES)
+            failure_evidence = await collector.collect_failure_evidence(
+                surface, await surface.current_route()
+            )
+        return result, failure_evidence
+    finally:
+        await surface.close()
+
+
 @app.command("replay")
 def replay_command(
     artifact: str = typer.Argument(...),
     param: list[str] = typer.Option([], "--param", "-p"),
     target: str = typer.Option("http://localhost:8000", "--target"),
+    evidence_out: str | None = typer.Option(None, "--evidence-out"),
 ) -> None:
     try:
         capability = Capability.model_validate_json(Path(artifact).read_text(encoding="utf-8"))
@@ -142,7 +193,12 @@ def replay_command(
         # rejected before it can drive the browser.
         typer.echo(f"invalid capability artifact: {error}")
         raise typer.Exit(code=1) from error
-    result = asyncio.run(
-        replay(capability, _parse_params(param), target, safe_clicks=_SAFE_CLICKS)
-    )
+    result, failure_evidence = asyncio.run(_run_replay(capability, _parse_params(param), target))
+    # stdout is the caller's deliverable: the raw typed result.
     typer.echo(result.model_dump_json())
+    # persisted evidence is masked: sensitive outputs and route params are redacted.
+    if evidence_out is not None:
+        payload: dict[str, object] = {"result": persistable_result(result, capability)}
+        if failure_evidence is not None:
+            payload["failure_evidence"] = failure_evidence.model_dump(mode="json")
+        Path(evidence_out).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

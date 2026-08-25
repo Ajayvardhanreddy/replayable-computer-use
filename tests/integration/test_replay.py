@@ -111,6 +111,20 @@ async def test_replay_unknown_member_is_business_outcome(legacy_core_url: str) -
     assert result.model_calls == 0
 
 
+async def test_captured_landmarks_exclude_the_member_number(legacy_core_url: str) -> None:
+    # The sanitized structural snapshot must carry the heading text but not the
+    # member-id span embedded in the profile heading.
+    surface = PlaywrightSurface()
+    await surface.start()
+    try:
+        await surface.goto(f"{legacy_core_url}/workspace/member/12345")
+        snapshot = await surface.capture()
+    finally:
+        await surface.close()
+    assert "Member Profile" in snapshot.landmarks
+    assert all("12345" not in landmark for landmark in snapshot.landmarks)
+
+
 async def test_replay_recovers_from_slow_load(legacy_core_url: str) -> None:
     # The slow scenario delays the profile load; bounded waiting absorbs it and replay
     # still succeeds (a recoverable runtime condition, not a failure). Also exercises

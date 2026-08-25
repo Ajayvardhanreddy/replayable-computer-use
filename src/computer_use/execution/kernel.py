@@ -21,13 +21,20 @@ from computer_use.model import (
     ProposedActionType,
     RiskClass,
     SafeLiteral,
+    SecretRef,
     Step,
     TableCellTarget,
     TargetDescriptor,
     TypeAction,
     ValueRef,
 )
-from computer_use.safety import Policy, RiskClassifier
+from computer_use.safety import (
+    ConfirmationPolicy,
+    MissingSecret,
+    Policy,
+    RiskClassifier,
+    SecretProvider,
+)
 from computer_use.surface import Candidate, Surface
 
 _EXECUTABLE = frozenset(
@@ -47,6 +54,7 @@ class RejectionCode(StrEnum):
     RISK_CONFIRMATION_REQUIRED = "RISK_CONFIRMATION_REQUIRED"
     UNKNOWN_PARAMETER = "UNKNOWN_PARAMETER"
     UNSUPPORTED_VALUE = "UNSUPPORTED_VALUE"
+    SECRET_UNAVAILABLE = "SECRET_UNAVAILABLE"
 
 
 class KernelRejection(Exception):
@@ -66,10 +74,15 @@ class KernelExecution:
 
 
 class ValueResolver:
-    """Resolves a typed ValueRef to a concrete string inside the trusted runtime."""
+    """Resolves a typed ValueRef to a concrete string inside the trusted runtime.
 
-    def __init__(self, inputs: dict[str, str]) -> None:
+    A resolved value (especially a secret) exists only transiently here, immediately
+    before it is used; it is never sent to the model or persisted in evidence.
+    """
+
+    def __init__(self, inputs: dict[str, str], secrets: SecretProvider | None = None) -> None:
         self._inputs = inputs
+        self._secrets = secrets
 
     def resolve(self, ref: ValueRef) -> str:
         if isinstance(ref, ParameterRef):
@@ -78,6 +91,13 @@ class ValueResolver:
             return self._inputs[ref.name]
         if isinstance(ref, SafeLiteral):
             return ref.value
+        if isinstance(ref, SecretRef):
+            if self._secrets is None:
+                raise KernelRejection(RejectionCode.SECRET_UNAVAILABLE, ref.name)
+            try:
+                return self._secrets.resolve(ref.name)
+            except MissingSecret:
+                raise KernelRejection(RejectionCode.SECRET_UNAVAILABLE, ref.name) from None
         raise KernelRejection(RejectionCode.UNSUPPORTED_VALUE, ref.source)
 
 
@@ -104,11 +124,13 @@ class TrustedKernel:
         policy: Policy,
         classifier: RiskClassifier,
         values: ValueResolver,
+        confirmation: ConfirmationPolicy | None = None,
     ) -> None:
         self._surface = surface
         self._policy = policy
         self._classifier = classifier
         self._values = values
+        self._confirmation = confirmation if confirmation is not None else ConfirmationPolicy()
 
     async def execute(
         self, proposal: ProposedAction, candidates: dict[str, Candidate]
@@ -123,7 +145,9 @@ class TrustedKernel:
         if candidate is None:
             raise KernelRejection(RejectionCode.UNKNOWN_CANDIDATE, proposal.candidate_id)
         target = _descriptor_from_candidate(candidate)
-        return await self._authorize_and_execute(action, target, proposal.value, proposal.output)
+        return await self._authorize_and_execute(
+            action, target, proposal.value, proposal.output, operation_id=None
+        )
 
     async def execute_step(self, step: Step) -> KernelExecution:
         """Replay entry point: execute a compiled step through the same authority path."""
@@ -139,7 +163,9 @@ class TrustedKernel:
             action = ProposedActionType.EXTRACT
         else:
             raise KernelRejection(RejectionCode.NOT_EXECUTABLE, step.action.type)
-        return await self._authorize_and_execute(action, step.target, value, step.output)
+        return await self._authorize_and_execute(
+            action, step.target, value, step.output, operation_id=step.id
+        )
 
     async def _authorize_and_execute(
         self,
@@ -147,6 +173,7 @@ class TrustedKernel:
         target: TargetDescriptor,
         value: ValueRef | None,
         output: str | None,
+        operation_id: str | None,
     ) -> KernelExecution:
         # Policy scope. This gates on action type today; a target-scoped rule should
         # gate on the resolved control (see _resolve_target), not the primary descriptor.
@@ -168,7 +195,10 @@ class TrustedKernel:
         # before any side effect.
         risk = self._classifier.classify(action, resolved)
         if risk is not RiskClass.READ_ONLY:
-            raise KernelRejection(RejectionCode.RISK_CONFIRMATION_REQUIRED, risk.value)
+            # A consequential action dispatches only if this specific operation is
+            # approved; an irreversible action is never auto-approved.
+            if risk is RiskClass.IRREVERSIBLE or not self._confirmation.is_approved(operation_id):
+                raise KernelRejection(RejectionCode.RISK_CONFIRMATION_REQUIRED, risk.value)
 
         # Execute.
         extracted: str | None = None

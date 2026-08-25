@@ -11,7 +11,6 @@ exception crosses this boundary.
 from __future__ import annotations
 
 import asyncio
-import re
 from uuid import uuid4
 
 from computer_use.model import (
@@ -23,12 +22,19 @@ from computer_use.model import (
     OutcomeClass,
     OutputSpec,
     ParamType,
+    PolicyEffect,
     ProposedActionType,
     RunResult,
     Step,
     Success,
 )
-from computer_use.safety import Policy, RiskClassifier
+from computer_use.safety import (
+    NavigationPolicy,
+    Policy,
+    RiskClassifier,
+    route_label,
+    route_matches,
+)
 from computer_use.surface import (
     PlaywrightSurface,
     Surface,
@@ -82,31 +88,35 @@ def _surface_failure(run_id: str, error: SurfaceError, step_id: str | None) -> F
         run_id=run_id,
         code=code,
         step_id=step_id,
-        observed=(str(error)[:200] or "surface error"),
+        # No raw driver text (it can embed the URL / a path parameter); the code is
+        # the signal.
+        observed="surface error during replay",
         retryable=False,
         model_calls=0,
     )
+
+
+def _nav_denied(
+    run_id: str, nav_policy: NavigationPolicy, url: str, step_id: str | None
+) -> Failure | None:
+    """A typed Failure if the URL is out of navigation scope, else None."""
+    decision = nav_policy.check(url)
+    if decision.effect is PolicyEffect.DENY:
+        return Failure(
+            run_id=run_id,
+            code=FailureCode.POLICY_DENIED,
+            step_id=step_id,
+            observed=f"navigation out of scope: {decision.reason}",
+            retryable=False,
+            model_calls=0,
+        )
+    return None
 
 
 def _coerce_output(value: str, spec: OutputSpec | None) -> str:
     if spec is not None and spec.type is ParamType.DECIMAL:
         return value.replace("$", "").replace(",", "").strip()
     return value
-
-
-def _route_matches(pattern: str, path: str) -> bool:
-    """Match a URL path against a narrow deterministic pattern.
-
-    Literal segments are escaped; a ``:param`` placeholder matches exactly one path
-    segment. The whole pattern is anchored. No artifact-supplied regex is honored.
-    """
-    parts: list[str] = []
-    for segment in pattern.split("/"):
-        if segment.startswith(":") and len(segment) > 1:
-            parts.append(r"[^/]+")
-        else:
-            parts.append(re.escape(segment))
-    return re.fullmatch("/".join(parts), path) is not None
 
 
 async def _matches(surface: Surface, condition: Condition) -> bool:
@@ -118,7 +128,7 @@ async def _matches(surface: Surface, condition: Condition) -> bool:
     if condition.heading is not None:
         checks.append(await surface.has_heading(condition.heading.name))
     if condition.route_pattern is not None:
-        checks.append(_route_matches(condition.route_pattern, await surface.current_route()))
+        checks.append(route_matches(condition.route_pattern, await surface.current_route()))
     if condition.any_of is not None:
         checks.append(any([await _matches(surface, sub) for sub in condition.any_of]))
     if condition.output_present is not None:
@@ -146,14 +156,18 @@ async def _success_satisfied(
     return True
 
 
-async def _observe(surface: Surface) -> str:
-    """A short, structural description of the current state for failure diagnostics."""
+async def _observe(surface: Surface, routes: frozenset[str]) -> str:
+    """A short, structural description of the current state for failure diagnostics.
+
+    The route is recorded as its allowed-route *pattern*, never the concrete path, so
+    a sensitive path parameter (a member id) is not persisted.
+    """
     try:
         heading = await surface.primary_heading()
         route = await surface.current_route()
     except SurfaceError:
         return "observed state unavailable"
-    return f"heading={heading!r} route={route!r}"
+    return f"heading={heading!r} route={route_label(route, routes)!r}"
 
 
 async def _resolve_step(surface: Surface, step: Step, timeout_ms: int) -> tuple[str, str | None]:
@@ -202,17 +216,24 @@ async def replay(
     safe_clicks: frozenset[str] = frozenset(),
     surface: Surface | None = None,
     resolve_timeout_ms: int = _RESOLVE_TIMEOUT_MS,
+    nav_policy: NavigationPolicy | None = None,
 ) -> RunResult:
     run_id = f"run_{uuid4().hex[:8]}"
     # Caller-owned session (the human-handoff seam): if a surface is injected the
     # caller owns its lifecycle; otherwise replay creates and closes its own.
     owns_surface = surface is None
     active: Surface = surface if surface is not None else PlaywrightSurface()
+    routes = nav_policy.allowed_routes if nav_policy is not None else frozenset()
     try:
         try:
             if owns_surface:
                 await active.start()
-            await active.goto(target_url.rstrip("/") + "/")
+            entry = target_url.rstrip("/") + "/"
+            if nav_policy is not None:
+                denied = _nav_denied(run_id, nav_policy, entry, None)
+                if denied is not None:
+                    return denied
+            await active.goto(entry)
             kernel = TrustedKernel(
                 active,
                 Policy(allowed_actions=_REPLAY_ACTIONS),
@@ -222,19 +243,30 @@ async def replay(
             outputs: dict[str, str] = {}
             for step in capability.steps:
                 await active.wait_settled()
+                if nav_policy is not None:
+                    denied = _nav_denied(run_id, nav_policy, await active.current_url(), step.id)
+                    if denied is not None:
+                        return denied
                 try:
                     execution = await _execute_step(kernel, step)
                     if step.output is not None and execution.extracted is not None:
                         outputs[step.output] = _coerce_output(
                             execution.extracted, capability.outputs.get(step.output)
                         )
+                    # An action may navigate; re-check scope on the resulting page
+                    # before reading it for an outcome or checkpoint.
+                    if nav_policy is not None:
+                        await active.wait_settled()
+                        post = _nav_denied(run_id, nav_policy, await active.current_url(), step.id)
+                        if post is not None:
+                            return post
                     kind, code = await _resolve_step(active, step, resolve_timeout_ms)
                 except KernelRejection as rejection:
                     return Failure(
                         run_id=run_id,
                         code=_failure_code(rejection.code),
                         step_id=step.id,
-                        observed=await _observe(active),
+                        observed=await _observe(active, routes),
                         retryable=False,
                         model_calls=0,
                     )
@@ -251,10 +283,14 @@ async def replay(
                         code=FailureCode.CHECKPOINT_FAILED,
                         step_id=step.id,
                         expected=repr(step.postcondition),
-                        observed=await _observe(active),
+                        observed=await _observe(active, routes),
                         retryable=False,
                         model_calls=0,
                     )
+            if nav_policy is not None:
+                denied = _nav_denied(run_id, nav_policy, await active.current_url(), None)
+                if denied is not None:
+                    return denied
             if await _success_satisfied(active, capability.success_checkpoint, outputs):
                 return Success(
                     run_id=run_id,
@@ -268,7 +304,7 @@ async def replay(
                 code=FailureCode.CHECKPOINT_FAILED,
                 step_id=None,
                 expected=repr(capability.success_checkpoint),
-                observed=await _observe(active),
+                observed=await _observe(active, routes),
                 retryable=False,
                 model_calls=0,
             )

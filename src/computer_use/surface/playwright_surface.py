@@ -300,7 +300,9 @@ class PlaywrightSurface:
         landmarks: list[str] = []
         for frame in self._pg().frames:
             frames.append(frame.name or "main")
-            landmarks.extend(cast(list[str], await self._safe_eval(frame, _HEADINGS_JS)))
+            # Heading primary text only (excludes child spans like a member id), so a
+            # structural snapshot carries landmarks, never embedded record values.
+            landmarks.extend(cast(list[str], await self._safe_eval(frame, _HEADING_TEXTS_JS)))
         return StructuralSnapshot(
             route=urlparse(self._pg().url).path, frames=frames, landmarks=landmarks
         )
@@ -346,6 +348,9 @@ class PlaywrightSurface:
 
     async def current_route(self) -> str:
         return urlparse(self._pg().url).path
+
+    async def current_url(self) -> str:
+        return self._pg().url
 
     async def wait_settled(self) -> None:
         try:

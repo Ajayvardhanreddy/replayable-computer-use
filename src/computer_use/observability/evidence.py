@@ -12,13 +12,34 @@ from pathlib import Path
 
 from computer_use.execution import KernelExecution
 from computer_use.model import (
+    Capability,
     EvidenceEvent,
     ParameterRef,
+    RunResult,
     SafeLiteral,
     SecretRef,
+    Sensitivity,
+    Success,
     TargetDescriptor,
     ValueRef,
 )
+
+# Allowlist of attribute keys that may be persisted per event type. The sanitizer
+# runs at the write boundary, so any key not listed here is dropped before bytes hit
+# disk — a caller mistake cannot leak raw data. Free-text (goal, reasons, raw error
+# messages) is intentionally not allowlisted anywhere.
+_ALLOWED_ATTRIBUTES: dict[str, frozenset[str]] = {
+    "discovery_started": frozenset({"provider", "model_id", "capability_id", "goal_present"}),
+    "step_executed": frozenset({"action", "target", "risk", "value", "output"}),
+    "step_rejected": frozenset({"code"}),
+    "discovery_finished": frozenset({"model_calls", "stop_reason"}),
+}
+
+
+def _sanitize(event: EvidenceEvent) -> EvidenceEvent:
+    allowed = _ALLOWED_ATTRIBUTES.get(event.event, frozenset())
+    safe = {key: value for key, value in event.attributes.items() if key in allowed}
+    return event.model_copy(update={"attributes": safe})
 
 
 class EvidenceStore:
@@ -27,8 +48,11 @@ class EvidenceStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
     def write(self, event: EvidenceEvent) -> None:
+        # Sanitize at the last point before serialization: only allowlisted,
+        # already-symbolic attributes reach disk.
+        safe = _sanitize(event)
         with self._path.open("a", encoding="utf-8") as handle:
-            handle.write(event.model_dump_json() + "\n")
+            handle.write(safe.model_dump_json() + "\n")
 
 
 def _now() -> datetime:
@@ -68,7 +92,8 @@ def discovery_started_event(
             "provider": provider,
             "model_id": model_id,
             "capability_id": capability_id,
-            "goal": goal,
+            # The raw natural-language goal may contain PII; record only its presence.
+            "goal_present": bool(goal),
         },
     )
 
@@ -104,3 +129,27 @@ def discovery_finished_event(run_id: str, model_calls: int, stop_reason: str) ->
         ts=_now(),
         attributes={"model_calls": model_calls, "stop_reason": stop_reason},
     )
+
+
+_SENSITIVITY_MASK: dict[Sensitivity, str] = {
+    Sensitivity.FINANCIAL: "<financial>",
+    Sensitivity.PII: "<pii>",
+    Sensitivity.SECRET: "<secret>",
+}
+
+
+def persistable_result(result: RunResult, capability: Capability) -> dict[str, object]:
+    """A RunResult masked for persistence: sensitive outputs become typed placeholders.
+
+    The in-memory RunResult returned to the caller keeps the raw value; only the
+    persisted evidence is masked by the output's declared sensitivity.
+    """
+    data: dict[str, object] = result.model_dump(mode="json")
+    if isinstance(result, Success):
+        specs = capability.outputs
+        masked: dict[str, str] = {}
+        for name, value in result.outputs.items():
+            spec = specs.get(name)
+            masked[name] = _SENSITIVITY_MASK.get(spec.sensitivity, value) if spec else value
+        data["outputs"] = masked
+    return data
