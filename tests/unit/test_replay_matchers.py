@@ -3,8 +3,9 @@ none is silently ignored, and route matching is a narrow deterministic form."""
 
 import pytest
 
-from computer_use.execution.replay import _matches, _route_matches, _success_satisfied
+from computer_use.execution.replay import _matches, _success_satisfied
 from computer_use.model import Condition, Heading
+from computer_use.safety import route_matches
 
 
 class _MatchSurface:
@@ -28,17 +29,17 @@ class _MatchSurface:
 
 
 def test_route_matches_param_is_one_segment_and_anchored() -> None:
-    assert _route_matches("/workspace/member/:id", "/workspace/member/12345")
-    assert _route_matches("/workspace/member/:id", "/workspace/member/54321")
+    assert route_matches("/workspace/member/:id", "/workspace/member/12345")
+    assert route_matches("/workspace/member/:id", "/workspace/member/54321")
     # a :param matches exactly one segment, so a trailing segment must not match
-    assert not _route_matches("/workspace/member/:id", "/workspace/member/12345/detail")
-    assert not _route_matches("/workspace/member/:id", "/workspace/inquiry")
+    assert not route_matches("/workspace/member/:id", "/workspace/member/12345/detail")
+    assert not route_matches("/workspace/member/:id", "/workspace/inquiry")
 
 
 def test_route_matches_escapes_literals() -> None:
     # the '.' is a literal, not a regex wildcard
-    assert _route_matches("/a.b", "/a.b")
-    assert not _route_matches("/a.b", "/axb")
+    assert route_matches("/a.b", "/a.b")
+    assert not route_matches("/a.b", "/axb")
 
 
 async def test_heading_matcher_uses_heading_identity() -> None:
