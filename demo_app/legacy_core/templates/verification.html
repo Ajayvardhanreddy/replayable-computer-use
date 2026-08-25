@@ -1,0 +1,22 @@
+{% extends "workspace_base.html" %}
+{% block title %}Identity Verification Required{% endblock %}
+{% block content %}
+<section class="gc2">
+  <h1 class="lc-h1">Identity Verification Required <span class="lc-panel">Member {{ member_number }}</span></h1>
+  {% if error %}
+  <p class="lc-alert" role="alert">Invalid verification code.</p>
+  {% endif %}
+  <p class="lc-note">
+    This account is flagged for manual identity verification. An authorized employee
+    must enter their verification code to release account details. This step cannot be
+    completed without that employee credential.
+  </p>
+  <form method="post" action="/workspace/member/{{ member_number }}{{ scenario_suffix }}" class="tbl-9">
+    <div class="lc-field">
+      <label for="f_vc">Employee Verification Code</label>
+      <input type="text" id="f_vc" name="verification_code" class="x-af83" autocomplete="off">
+    </div>
+  </form>
+  <p class="lc-status">Status: Verification pending</p>
+</section>
+{% endblock %}

@@ -1,0 +1,25 @@
+{
+  "intervention_id": "int_d4db8d93",
+  "run_id": "run_362c214c",
+  "capability": "member.lookup_savings_balance",
+  "version": 1,
+  "step_id": "step_3_extract",
+  "reason": "UNKNOWN_DIALOG",
+  "control_owner": "automation",
+  "control_epoch": 0,
+  "route": "/",
+  "evidence": {
+    "policy": "structural_only",
+    "route": "/",
+    "frames": [
+      "main",
+      "lc-workspace"
+    ],
+    "landmarks": [
+      "System Notice",
+      "Member Profile"
+    ],
+    "screenshot": null
+  },
+  "ts": "2026-08-25T19:27:07.922273Z"
+}

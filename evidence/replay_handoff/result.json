@@ -1,0 +1,12 @@
+{
+  "result": {
+    "run_id": "run_362c214c",
+    "model_calls": 0,
+    "status": "success",
+    "capability": "member.lookup_savings_balance",
+    "version": 1,
+    "outputs": {
+      "savings_balance": "<financial>"
+    }
+  }
+}

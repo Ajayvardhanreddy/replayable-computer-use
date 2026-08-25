@@ -60,6 +60,38 @@ def test_unexpected_dialog_scenario_renders_modal() -> None:
     assert 'role="dialog"' in dialog.text
 
 
+def test_verification_scenario_withholds_details_behind_a_code() -> None:
+    resp = client.get("/workspace/member/12345", params={"scenario": "verification_required"})
+    assert resp.status_code == 200
+    body = resp.text
+    assert "Identity Verification Required" in body
+    assert "Employee Verification Code" in body
+    assert "8,421.31" not in body  # the balance is not released yet
+
+
+def test_verification_wrong_code_is_rejected() -> None:
+    resp = client.post(
+        "/workspace/member/12345",
+        params={"scenario": "verification_required"},
+        data={"verification_code": "0000"},
+    )
+    assert resp.status_code == 200
+    assert "Invalid verification code" in resp.text
+    assert "8,421.31" not in resp.text
+
+
+def test_verification_correct_code_releases_the_profile() -> None:
+    # TestClient follows the 303; the set cookie carries verification to the profile GET.
+    resp = client.post(
+        "/workspace/member/12345",
+        params={"scenario": "verification_required"},
+        data={"verification_code": "4729"},
+    )
+    assert resp.status_code == 200
+    assert "8,421.31" in resp.text  # verified: the balance is now shown
+    assert "Identity Verification Required" not in resp.text
+
+
 def test_slow_scenario_still_serves_correctly() -> None:
     resp = client.get("/workspace/member/12345", params={"scenario": "slow"})
     assert resp.status_code == 200

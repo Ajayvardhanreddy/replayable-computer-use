@@ -43,3 +43,14 @@ class ParamType(StrEnum):
 class PolicyEffect(StrEnum):
     ALLOW = "allow"
     DENY = "deny"
+
+
+class ControlOwner(StrEnum):
+    """Who currently holds exclusive authority to act on a live session.
+
+    At any instant exactly one owner may drive the session. Automation and a
+    human never act simultaneously; ownership transfers are explicit and audited.
+    """
+
+    AUTOMATION = "automation"
+    HUMAN = "human"

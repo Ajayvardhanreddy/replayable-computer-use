@@ -155,6 +155,9 @@ class _MemberPageSurface:
     async def has_heading(self, name: str) -> bool:
         return False  # never reaches "Member Profile" -> checkpoint fails
 
+    async def has_blocking_dialog(self) -> bool:
+        return False
+
     async def current_route(self) -> str:
         return f"/workspace/member/{self._member}"
 

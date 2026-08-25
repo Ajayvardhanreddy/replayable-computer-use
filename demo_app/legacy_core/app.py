@@ -16,7 +16,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .data import find_member
-from .scenarios import SCENARIO_COOKIE, SLOW_DELAY_SECONDS, Scenario, resolve_scenario
+from .scenarios import (
+    EMPLOYEE_VERIFICATION_CODE,
+    SCENARIO_COOKIE,
+    SLOW_DELAY_SECONDS,
+    VERIFIED_COOKIE,
+    Scenario,
+    resolve_scenario,
+)
 
 _BASE_DIR = Path(__file__).parent
 _TEMPLATES = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
@@ -92,6 +99,10 @@ async def submit_inquiry(
     )
 
 
+def _is_verified(request: Request, member_number: str) -> bool:
+    return request.cookies.get(VERIFIED_COOKIE) == member_number
+
+
 @app.get("/workspace/member/{member_number}", response_class=HTMLResponse)
 async def member_profile(request: Request, member_number: str) -> Response:
     scenario = _request_scenario(request)
@@ -107,6 +118,17 @@ async def member_profile(request: Request, member_number: str) -> Response:
         return _TEMPLATES.TemplateResponse(
             request=request, name="inquiry.html", context=not_found_context, status_code=200
         )
+    # A flagged account withholds its details behind manual employee verification. Once
+    # an authorized employee has verified (recorded in a cookie), the profile is shown.
+    if scenario is Scenario.VERIFICATION_REQUIRED and not _is_verified(request, member_number):
+        verify_context: dict[str, Any] = {
+            "member_number": member_number,
+            "scenario_suffix": _suffix(scenario),
+            "error": False,
+        }
+        return _TEMPLATES.TemplateResponse(
+            request=request, name="verification.html", context=verify_context
+        )
     profile_context: dict[str, Any] = {
         "member": member,
         "scenario_suffix": _suffix(scenario),
@@ -114,4 +136,36 @@ async def member_profile(request: Request, member_number: str) -> Response:
     }
     return _TEMPLATES.TemplateResponse(
         request=request, name="profile.html", context=profile_context
+    )
+
+
+@app.post("/workspace/member/{member_number}")
+async def verify_member(
+    request: Request, member_number: str, verification_code: str = Form(default="")
+) -> Response:
+    scenario = _request_scenario(request)
+    member = find_member(member_number)
+    if member is None:
+        not_found_context: dict[str, Any] = {
+            "scenario_suffix": _suffix(scenario),
+            "not_found": True,
+            "member_number": member_number,
+        }
+        return _TEMPLATES.TemplateResponse(
+            request=request, name="inquiry.html", context=not_found_context, status_code=200
+        )
+    if verification_code.strip() == EMPLOYEE_VERIFICATION_CODE:
+        # Verified: record it and return to the profile, which now renders normally.
+        response: Response = RedirectResponse(
+            f"/workspace/member/{member_number}{_suffix(scenario)}", status_code=303
+        )
+        response.set_cookie(VERIFIED_COOKIE, member_number)
+        return response
+    error_context: dict[str, Any] = {
+        "member_number": member_number,
+        "scenario_suffix": _suffix(scenario),
+        "error": True,
+    }
+    return _TEMPLATES.TemplateResponse(
+        request=request, name="verification.html", context=error_context, status_code=200
     )
