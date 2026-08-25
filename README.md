@@ -3,9 +3,11 @@
 LLM-discovered, typed computer-use capabilities that replay deterministically against legacy
 banking UIs, with a software-owned trust boundary and safety guardrails.
 
-> **Status: in progress.** The core discovery → capability → replay vertical slice is
-> implemented and tested. Safety hardening, human-in-the-loop takeover, and the full
-> write-up are still in progress. This README documents only what currently exists.
+The discovery → capability → replay vertical slice, the safety/redaction boundary, and
+same-session human-in-the-loop takeover are implemented and tested. The escalation and
+control-transfer design is written up in [`docs/handoff-design.md`](docs/handoff-design.md);
+runnable handoff demos with expected output are in
+[`docs/demo-handoff.md`](docs/demo-handoff.md).
 
 ## Requirements
 
@@ -68,3 +70,26 @@ uv run cua replay artifacts/member_lookup.v1.json --param member_number=99999
 
 Without a model key you can still replay the committed artifact at
 `evidence/capability/member_lookup.v1.json`.
+
+## Human handoff
+
+When a run cannot safely proceed on its own, it pauses and a human takes over the *same* live
+session, resolves the blocker, and hands control back; the runtime reconciles observable state
+before resuming. Two runnable demos (add `--headed` to watch the browser):
+
+```bash
+uv run legacy-core                        # terminal 1: the target app
+
+# Replay meets an unexpected modal it cannot classify (deterministic, no model key):
+uv run cua handoff-demo --headed
+#   operator> take  ->  ack  ->  resume        (ends model_calls = 0, balance returned)
+
+# A live discovery model asks for a human on a flagged account (needs a model key):
+uv run cua discover --headed --scenario verification_required \
+  --goal "Look up this member and return their savings balance" \
+  --param member_number=12345
+#   operator> take  ->  submit Employee Verification Code=4729  ->  resume
+```
+
+See [`docs/demo-handoff.md`](docs/demo-handoff.md) for the full walkthrough with expected
+output and evidence, and [`docs/handoff-design.md`](docs/handoff-design.md) for the design.

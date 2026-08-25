@@ -1,0 +1,24 @@
+{
+  "intervention_id": "int_6812e27c",
+  "run_id": "run_64647ff8",
+  "capability": "member.lookup_savings_balance",
+  "version": 1,
+  "step_id": null,
+  "reason": "HUMAN_REQUESTED",
+  "control_owner": "automation",
+  "control_epoch": 0,
+  "route": "/",
+  "evidence": {
+    "policy": "structural_only",
+    "route": "/",
+    "frames": [
+      "main",
+      "lc-workspace"
+    ],
+    "landmarks": [
+      "Identity Verification Required"
+    ],
+    "screenshot": null
+  },
+  "ts": "2026-08-25T16:43:22.745730Z"
+}
