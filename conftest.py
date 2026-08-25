@@ -11,6 +11,14 @@ from __future__ import annotations
 import pytest
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    # Load a local, git-ignored .env so an opt-in --run-live run can pick up
+    # ANTHROPIC_API_KEY without it being exported in the shell. No-op if absent.
+    from computer_use.cli import _load_dotenv
+
+    _load_dotenv()
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--run-live",

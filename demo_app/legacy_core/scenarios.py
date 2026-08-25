@@ -17,6 +17,14 @@ class Scenario(StrEnum):
     NORMAL = "normal"
     SLOW = "slow"
     UNEXPECTED_DIALOG = "unexpected_dialog"
+    VERIFICATION_REQUIRED = "verification_required"
+
+
+# The synthetic employee verification code that releases a flagged account. It is a
+# credential only an authorized employee would hold; the automated lookup is not
+# given it, which is what makes the flagged state one the capability cannot resolve.
+EMPLOYEE_VERIFICATION_CODE = "4729"
+VERIFIED_COOKIE = "lc_verified"
 
 
 def resolve_scenario(query_value: str | None, cookie_value: str | None) -> Scenario:

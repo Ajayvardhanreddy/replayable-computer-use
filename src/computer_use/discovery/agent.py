@@ -8,15 +8,24 @@ identical action trips a bounded "stuck" stop so a loop cannot burn the step bud
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from uuid import uuid4
 
-from computer_use.execution import KernelRejection, TrustedKernel
+from computer_use.execution import (
+    ControlLease,
+    InterventionSignal,
+    KernelRejection,
+    RejectionCode,
+    TrustedKernel,
+)
+from computer_use.handoff import OperatorController
 from computer_use.model import PolicyEffect, ProposedActionType, TargetDescriptor
 from computer_use.observability import (
     EvidenceStore,
     discovery_finished_event,
     discovery_started_event,
+    intervention_raised_event,
     step_executed_event,
     step_rejected_event,
 )
@@ -34,8 +43,33 @@ from .model import (
 )
 from .trace import DiscoveryTrace, TraceStep
 
-_STUCK_LIMIT = 3
+# A handler drives the human takeover on the same live session and returns True when
+# the human resolved the block and discovery should continue, False to stop.
+HumanRequestHandler = Callable[[OperatorController], Awaitable[bool]]
+
+_STUCK_LIMIT = 5
 _REPEAT_LIMIT = 3
+
+# Human-readable feedback the untrusted model receives when the trusted kernel refuses
+# an action, phrased so a genuinely blocked action steers toward escalation rather than
+# a futile retry. Generic to the rejection class, never to any one screen.
+_REJECTION_GUIDANCE: dict[RejectionCode, str] = {
+    RejectionCode.RISK_CONFIRMATION_REQUIRED: (
+        "that action was blocked because it makes a change requiring confirmation or "
+        "authorization you have not been given. You cannot complete this goal on your own "
+        "with the controls available; do not try other controls to get around it — propose "
+        "request_human"
+    ),
+}
+
+
+def _rejection_message(rejection: KernelRejection) -> str:
+    guidance = _REJECTION_GUIDANCE.get(rejection.code)
+    if guidance is not None:
+        return guidance
+    if rejection.detail:
+        return f"{rejection.code.value}: {rejection.detail}"
+    return rejection.code.value
 
 
 @dataclass
@@ -75,6 +109,33 @@ def _describe(action: ProposedActionType, target: TargetDescriptor) -> str:
     return f"{action.value} {location}"
 
 
+class _DiscoveryHandoff:
+    """A handoff view of the live discovery session for the operator control path.
+
+    Exposes exactly what ``OperatorController`` needs (the ``HandoffSession`` shape),
+    reusing the same lease, surface, and evidence boundary as replay handoff.
+    """
+
+    def __init__(
+        self, run_id: str, surface: Surface, lease: ControlLease, nav_policy: NavigationPolicy
+    ) -> None:
+        self.run_id = run_id
+        self.surface = surface
+        self.lease = lease
+        self._nav_policy = nav_policy
+        self.pending: InterventionSignal | None = None
+
+    @property
+    def nav_policy(self) -> NavigationPolicy:
+        return self._nav_policy
+
+    async def current_route(self) -> str:
+        return await self.surface.current_route()
+
+    def route_label(self, path: str) -> str:
+        return route_label(path, self._nav_policy.allowed_routes)
+
+
 async def discover(
     model: DiscoveryModel,
     surface: Surface,
@@ -85,8 +146,18 @@ async def discover(
     nav_policy: NavigationPolicy,
     max_steps: int = 12,
     evidence: EvidenceStore | None = None,
+    lease: ControlLease | None = None,
+    on_human_request: HumanRequestHandler | None = None,
 ) -> DiscoveryOutcome:
     run_id = f"run_{uuid4().hex[:8]}"
+    # Same-session human handoff for a genuinely stuck model: available only when a
+    # lease and a handler are supplied. Otherwise a request-human proposal stops the
+    # run with a typed reason, as before.
+    handoff: _DiscoveryHandoff | None = None
+    operator: OperatorController | None = None
+    if lease is not None and on_human_request is not None:
+        handoff = _DiscoveryHandoff(run_id, surface, lease, nav_policy)
+        operator = OperatorController(handoff, evidence=evidence)
     goal_ctx = _goal_context(spec)
     entry = target_url.rstrip("/") + "/"
     # Navigation scope is mandatory and fail-closed for discovery too.
@@ -157,8 +228,34 @@ async def discover(
                 break
             continue
         if proposal.action is ProposedActionType.REQUEST_HUMAN:
-            stop_reason = "HUMAN_REQUESTED"
-            break
+            # The model judged it cannot safely proceed. With no handoff wired, stop
+            # with a typed reason; otherwise pause and hand the SAME live session to a
+            # human, then re-observe and let the model continue.
+            if handoff is None or operator is None or on_human_request is None:
+                stop_reason = "HUMAN_REQUESTED"
+                break
+            handoff.pending = InterventionSignal(
+                reason="HUMAN_REQUESTED",
+                run_id=run_id,
+                capability=spec.capability_id,
+                version=1,
+                step_id=None,
+                intervention_id=f"int_{uuid4().hex[:8]}",
+                epoch=handoff.lease.epoch,
+            )
+            if evidence is not None:
+                evidence.write(intervention_raised_event(run_id, "HUMAN_REQUESTED", model_calls))
+            try:
+                resolved = await on_human_request(operator)
+            finally:
+                handoff.pending = None
+            if not resolved:
+                stop_reason = "HUMAN_REQUESTED"
+                break
+            # Resolved on the same session: discard the stale pre-handoff observation
+            # and loop, forcing a fresh observation and a new model decision.
+            last_error = None
+            continue
         if proposal.action is ProposedActionType.OBSERVE:
             last_error = None
             continue
@@ -187,9 +284,11 @@ async def discover(
         if proposal.action is ProposedActionType.CLICK:
             heading_before = await surface.primary_heading()
         try:
-            execution = await kernel.execute(proposal, by_id)
+            execution = await kernel.execute(
+                proposal, by_id, epoch=lease.epoch if lease is not None else None
+            )
         except KernelRejection as rejection:
-            last_error = f"{rejection.code.value}: {rejection.detail}"
+            last_error = _rejection_message(rejection)
             consecutive_errors += 1
             if evidence is not None:
                 evidence.write(step_rejected_event(run_id, rejection.code.value))

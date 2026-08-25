@@ -57,6 +57,13 @@ Rules:
   the goal asks for, and bind it with an "output" naming one of the declared outputs.
 - Do not extract an output already listed in "obtained_outputs". Once every requested
   output has been obtained, propose declare_success; the runtime independently verifies it.
+- If the goal cannot be advanced safely with the inputs and controls available — for
+  example a required field asks for information or a credential you were not given, and no
+  available action makes legitimate progress — do not guess, fabricate a value, or try to
+  submit past it. Propose request_human with a brief reason instead.
+- Do not repeat an action that was just rejected. If "last_error" reports that an action was
+  blocked as requiring confirmation or authorization you do not have, treat that as a signal
+  that you cannot proceed on your own: propose request_human rather than retrying it.
 - If "last_error" is present, your previous reply was rejected — correct it and return
   ONLY the JSON object.
 """
