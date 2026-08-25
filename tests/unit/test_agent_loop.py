@@ -11,11 +11,18 @@ from computer_use.model import (
     Sensitivity,
     TargetDescriptor,
 )
-from computer_use.safety import Policy, RiskClassifier
+from computer_use.safety import NavigationPolicy, Policy, RiskClassifier
 from computer_use.surface import Candidate, Observation, StructuralSnapshot
 
 _ALLOWED = frozenset(
     {ProposedActionType.CLICK, ProposedActionType.TYPE, ProposedActionType.EXTRACT}
+)
+# The stand-in surfaces stay within this scope, so navigation checks pass.
+_NAV = NavigationPolicy(
+    allowed_origins=frozenset({"http://localhost"}),
+    allowed_routes=frozenset(
+        {"/", "/workspace/inquiry", "/profile", "/workspace/member/:member_number"}
+    ),
 )
 
 
@@ -51,6 +58,9 @@ class _LoopSurface:
         return False
 
     async def wait_settled(self) -> None: ...
+    async def current_url(self) -> str:
+        return "http://localhost/workspace/inquiry"
+
     async def primary_heading(self) -> str | None:
         return "Member Inquiry"
 
@@ -124,6 +134,9 @@ class _CellSurface(_LoopSurface):
             ],
         )
 
+    async def current_url(self) -> str:
+        return "http://localhost/profile"
+
     async def extract(self, target: TargetDescriptor) -> str:
         return "$8,421.31"
 
@@ -148,7 +161,7 @@ async def test_repeated_action_trips_stuck_before_max_steps() -> None:
     surface = _LoopSurface()
     outcome = await discover(
         _RepeatingModel(), surface, _kernel(surface, {"member_number": "12345"}),
-        _spec(), "http://localhost", max_steps=12,
+        _spec(), "http://localhost", nav_policy=_NAV, max_steps=12,
     )
     assert outcome.stop_reason == "STUCK"
     assert outcome.model_calls == 3  # bounded, not the full 12-step budget
@@ -157,7 +170,8 @@ async def test_repeated_action_trips_stuck_before_max_steps() -> None:
 async def test_premature_declare_success_is_not_ratified() -> None:
     surface = _LoopSurface()
     outcome = await discover(
-        _AlwaysDeclareSuccessModel(), surface, _kernel(surface), _spec(), "http://localhost"
+        _AlwaysDeclareSuccessModel(), surface, _kernel(surface), _spec(),
+        "http://localhost", nav_policy=_NAV,
     )
     assert outcome.stop_reason != "GOAL_REACHED"
     assert outcome.stop_reason == "STUCK"
@@ -167,7 +181,7 @@ async def test_premature_declare_success_is_not_ratified() -> None:
 async def test_extract_of_undeclared_output_is_rejected() -> None:
     surface = _LoopSurface()
     outcome = await discover(
-        _BogusOutputModel(), surface, _kernel(surface), _spec(), "http://localhost"
+        _BogusOutputModel(), surface, _kernel(surface), _spec(), "http://localhost", nav_policy=_NAV
     )
     assert outcome.stop_reason != "GOAL_REACHED"
     assert outcome.trace.steps == []  # nothing was executed
@@ -176,7 +190,8 @@ async def test_extract_of_undeclared_output_is_rejected() -> None:
 async def test_success_after_required_extraction_is_ratified() -> None:
     surface = _CellSurface()
     outcome = await discover(
-        _ExtractThenSucceedModel(), surface, _kernel(surface), _spec(), "http://localhost"
+        _ExtractThenSucceedModel(), surface, _kernel(surface), _spec(),
+        "http://localhost", nav_policy=_NAV,
     )
     assert outcome.stop_reason == "GOAL_REACHED"
     assert len(outcome.trace.steps) == 1  # the extract
@@ -221,7 +236,8 @@ class _ObservationRecordingModel:
 async def test_redundant_extract_of_obtained_output_is_not_recorded() -> None:
     surface = _CellSurface()
     outcome = await discover(
-        _ReExtractThenSucceedModel(), surface, _kernel(surface), _spec(), "http://localhost"
+        _ReExtractThenSucceedModel(), surface, _kernel(surface), _spec(),
+        "http://localhost", nav_policy=_NAV,
     )
     assert outcome.stop_reason == "GOAL_REACHED"
     # the second (redundant) extract is nudged away, not executed or recorded
@@ -231,7 +247,46 @@ async def test_redundant_extract_of_obtained_output_is_not_recorded() -> None:
 async def test_obtained_outputs_is_surfaced_to_the_model() -> None:
     model = _ObservationRecordingModel()
     surface = _CellSurface()
-    outcome = await discover(model, surface, _kernel(surface), _spec(), "http://localhost")
+    outcome = await discover(
+        model, surface, _kernel(surface), _spec(), "http://localhost", nav_policy=_NAV
+    )
     assert outcome.stop_reason == "GOAL_REACHED"
     assert model.seen[0] == []  # nothing obtained on the first turn
     assert model.seen[1] == ["savings_balance"]  # after the extract, the model sees it
+
+
+class _MemberRouteSurface(_LoopSurface):
+    """Observation is on a concrete member page whose path carries a member id."""
+
+    async def observe(self) -> Observation:
+        return Observation(
+            route="/workspace/member/CANARY_MEMBER_123",
+            candidates=[
+                Candidate(id="c1", role="textbox", name="Member Number", frame="lc-workspace")
+            ],
+        )
+
+    async def current_url(self) -> str:
+        return "http://localhost/workspace/member/CANARY_MEMBER_123"
+
+
+class _RouteRecordingModel:
+    provider = "fake"
+    model_id = "route-recorder"
+
+    def __init__(self) -> None:
+        self.routes: list[str] = []
+
+    async def decide(self, goal: GoalContext, observation: ModelObservation) -> ProposedAction:
+        self.routes.append(observation.route)
+        return ProposedAction(action=ProposedActionType.DECLARE_SUCCESS)
+
+
+async def test_route_is_canonicalized_before_model_egress() -> None:
+    # A concrete member path must never reach the model; it sees the allowed pattern.
+    model = _RouteRecordingModel()
+    surface = _MemberRouteSurface()
+    await discover(model, surface, _kernel(surface), _spec(), "http://localhost", nav_policy=_NAV)
+    assert model.routes  # the model was consulted
+    assert model.routes[0] == "/workspace/member/:member_number"
+    assert all("CANARY_MEMBER_123" not in route for route in model.routes)

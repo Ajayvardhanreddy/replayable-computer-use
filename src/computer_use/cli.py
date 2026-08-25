@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import typer
 from pydantic import ValidationError
@@ -36,7 +35,7 @@ from computer_use.observability import (
     FailureEvidence,
     persistable_result,
 )
-from computer_use.safety import NavigationPolicy, Policy, RiskClassifier
+from computer_use.safety import EnvSecretProvider, NavigationPolicy, Policy, RiskClassifier
 from computer_use.surface import PlaywrightSurface
 
 app = typer.Typer(add_completion=False, help="Computer-use discovery and replay.")
@@ -46,14 +45,17 @@ _ALLOWED = frozenset(
 )
 # Explicit known-safe read-only click for this capability (a member lookup).
 _SAFE_CLICKS = frozenset({"Search"})
+# Trusted navigation scope: the origins the agent may operate on. This is operator
+# configuration, deliberately NOT derived from the caller-supplied --target, so a
+# target cannot define its own allowed scope. An off-scope target is refused by the
+# runtime before any action.
+_ALLOWED_ORIGINS = frozenset({"http://localhost:8000", "http://127.0.0.1:8000"})
 # The routes this capability is scoped to on the target host.
 _ALLOWED_ROUTES = frozenset({"/", "/workspace/inquiry", "/workspace/member/:member_number"})
 
 
-def _nav_policy(target: str) -> NavigationPolicy:
-    parts = urlsplit(target)
-    origin = f"{parts.scheme}://{parts.netloc}"
-    return NavigationPolicy(allowed_origins=frozenset({origin}), allowed_routes=_ALLOWED_ROUTES)
+def _nav_policy() -> NavigationPolicy:
+    return NavigationPolicy(allowed_origins=_ALLOWED_ORIGINS, allowed_routes=_ALLOWED_ROUTES)
 
 
 def _capability_a_spec(goal: str) -> GoalSpec:
@@ -104,7 +106,7 @@ async def _run_discover(
             surface,
             Policy(allowed_actions=_ALLOWED),
             RiskClassifier(safe_click_names=_SAFE_CLICKS),
-            ValueResolver(inputs),
+            ValueResolver(inputs, EnvSecretProvider()),
         )
         outcome = await discover(
             AnthropicDiscoveryModel(model=model_id),
@@ -113,7 +115,7 @@ async def _run_discover(
             spec,
             target,
             evidence=store,
-            nav_policy=_nav_policy(target),
+            nav_policy=_nav_policy(),
         )
     finally:
         await surface.close()
@@ -166,7 +168,8 @@ async def _run_replay(
             target,
             safe_clicks=_SAFE_CLICKS,
             surface=surface,
-            nav_policy=_nav_policy(target),
+            nav_policy=_nav_policy(),
+            secrets=EnvSecretProvider(),
         )
         failure_evidence: FailureEvidence | None = None
         if isinstance(result, Failure):

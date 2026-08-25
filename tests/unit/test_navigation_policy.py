@@ -103,6 +103,24 @@ async def test_replay_refuses_out_of_scope_target_before_acting() -> None:
     assert fake.touched is False  # blocked before goto / any action
 
 
+async def test_navigation_denial_persists_only_the_structural_rule() -> None:
+    # An off-scope target whose path carries a canary: the denial diagnostic must be
+    # the structural rule, never the concrete URL/path.
+    fake = _NoopSurface()
+    result = await replay(
+        _min_capability(),
+        {},
+        "http://evil.example/workspace/member/CANARY_9",
+        surface=fake,
+        nav_policy=_policy(),
+    )
+    assert isinstance(result, Failure)
+    assert result.code is FailureCode.POLICY_DENIED
+    assert result.observed == "navigation denied: navigation_origin"
+    assert "CANARY_9" not in (result.observed or "")
+    assert "evil.example" not in (result.observed or "")
+
+
 def test_route_label_returns_pattern_not_concrete_path() -> None:
     routes = frozenset({"/workspace/member/:member_number", "/workspace/inquiry"})
     assert route_label("/workspace/member/CANARY_9", routes) == "/workspace/member/:member_number"

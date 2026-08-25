@@ -20,7 +20,7 @@ from computer_use.observability import (
     step_executed_event,
     step_rejected_event,
 )
-from computer_use.safety import NavigationPolicy
+from computer_use.safety import NavigationPolicy, route_label
 from computer_use.surface import Candidate, Surface
 
 from .compiler import GoalSpec
@@ -81,14 +81,16 @@ async def discover(
     kernel: TrustedKernel,
     spec: GoalSpec,
     target_url: str,
+    *,
+    nav_policy: NavigationPolicy,
     max_steps: int = 12,
     evidence: EvidenceStore | None = None,
-    nav_policy: NavigationPolicy | None = None,
 ) -> DiscoveryOutcome:
     run_id = f"run_{uuid4().hex[:8]}"
     goal_ctx = _goal_context(spec)
     entry = target_url.rstrip("/") + "/"
-    if nav_policy is not None and nav_policy.check(entry).effect is PolicyEffect.DENY:
+    # Navigation scope is mandatory and fail-closed for discovery too.
+    if nav_policy.check(entry).effect is PolicyEffect.DENY:
         return DiscoveryOutcome(
             trace=DiscoveryTrace(steps=[]), model_calls=0, stop_reason="OUT_OF_SCOPE"
         )
@@ -112,14 +114,15 @@ async def discover(
 
     for step_index in range(max_steps):
         await surface.wait_settled()
-        if nav_policy is not None:
-            if nav_policy.check(await surface.current_url()).effect is PolicyEffect.DENY:
-                stop_reason = "OUT_OF_SCOPE"
-                break
+        if nav_policy.check(await surface.current_url()).effect is PolicyEffect.DENY:
+            stop_reason = "OUT_OF_SCOPE"
+            break
         obs = await surface.observe()
         by_id = {candidate.id: candidate for candidate in obs.candidates}
         model_obs = ModelObservation(
-            route=obs.route,
+            # The concrete path may carry a sensitive parameter (a member id); the
+            # model only needs the structural route, so egress the allowed pattern.
+            route=route_label(obs.route, nav_policy.allowed_routes),
             candidates=[_minimize(candidate) for candidate in obs.candidates],
             actions_taken=list(history),
             obtained_outputs=sorted(obtained_outputs),
@@ -203,10 +206,9 @@ async def discover(
             await surface.wait_settled()
             # A click may navigate; re-check scope before recording a landmark from
             # the resulting page into the trace/artifact.
-            if nav_policy is not None:
-                if nav_policy.check(await surface.current_url()).effect is PolicyEffect.DENY:
-                    stop_reason = "OUT_OF_SCOPE"
-                    break
+            if nav_policy.check(await surface.current_url()).effect is PolicyEffect.DENY:
+                stop_reason = "OUT_OF_SCOPE"
+                break
             # Record the heading only after it actually changes, so a slow navigation
             # doesn't capture the stale (pre-click) heading as the checkpoint.
             landmark = await surface.wait_for_heading_change(heading_before)

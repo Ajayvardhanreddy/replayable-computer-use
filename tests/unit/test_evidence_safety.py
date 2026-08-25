@@ -12,6 +12,8 @@ from computer_use.model import (
     Condition,
     EvidenceEvent,
     ExtractAction,
+    Failure,
+    FailureCode,
     Heading,
     InputSpec,
     OutputSpec,
@@ -120,6 +122,25 @@ def test_persisted_result_masks_financial_output_but_result_keeps_it() -> None:
     assert "CANARY_8421" not in json.dumps(masked)
     # the in-memory result returned to the caller keeps the raw deliverable value
     assert result.outputs["savings_balance"] == "CANARY_8421"
+
+
+def test_persisted_failure_drops_free_text_expected_and_observed() -> None:
+    # A failure's expected/observed are free text that can carry a raw value; the
+    # persisted result keeps only the stable structural code + step id.
+    result = Failure(
+        run_id="r",
+        code=FailureCode.CHECKPOINT_FAILED,
+        step_id="s2",
+        expected="CANARY_EXPECTED_text",
+        observed="CANARY_OBSERVED /workspace/member/12345",
+    )
+    masked = persistable_result(result, _capability())
+    text = json.dumps(masked)
+    assert "CANARY_EXPECTED" not in text
+    assert "CANARY_OBSERVED" not in text
+    assert "12345" not in text
+    assert masked["code"] == "CHECKPOINT_FAILED"  # stable structural signal kept
+    assert masked["step_id"] == "s2"
 
 
 def test_evidence_policy_fails_closed_to_structural_only() -> None:

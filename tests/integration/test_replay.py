@@ -24,6 +24,7 @@ from computer_use.model import (
     TableCellTarget,
     TargetDescriptor,
 )
+from computer_use.safety import NavigationPolicy
 from computer_use.surface import PlaywrightSurface
 
 _SAFE_CLICKS = frozenset({"Search"})
@@ -83,28 +84,37 @@ def _capability() -> Capability:
     return compile_capability(trace, spec)
 
 
-async def test_replay_returns_second_member_balance(legacy_core_url: str) -> None:
+async def test_replay_returns_second_member_balance(
+    legacy_core_url: str, nav_policy: NavigationPolicy
+) -> None:
     result = await replay(
-        _capability(), {"member_number": "54321"}, legacy_core_url, safe_clicks=_SAFE_CLICKS
+        _capability(), {"member_number": "54321"}, legacy_core_url,
+        nav_policy=nav_policy, safe_clicks=_SAFE_CLICKS,
     )
     assert isinstance(result, Success)
     assert result.outputs["savings_balance"] == "312.45"
     assert result.model_calls == 0
 
 
-async def test_replay_first_member_balance(legacy_core_url: str) -> None:
+async def test_replay_first_member_balance(
+    legacy_core_url: str, nav_policy: NavigationPolicy
+) -> None:
     result = await replay(
-        _capability(), {"member_number": "12345"}, legacy_core_url, safe_clicks=_SAFE_CLICKS
+        _capability(), {"member_number": "12345"}, legacy_core_url,
+        nav_policy=nav_policy, safe_clicks=_SAFE_CLICKS,
     )
     assert isinstance(result, Success)
     assert result.outputs["savings_balance"] == "8421.31"
     assert result.model_calls == 0
 
 
-async def test_replay_unknown_member_is_business_outcome(legacy_core_url: str) -> None:
+async def test_replay_unknown_member_is_business_outcome(
+    legacy_core_url: str, nav_policy: NavigationPolicy
+) -> None:
     # "No such member" is a legitimate domain answer, not a hard failure.
     result = await replay(
-        _capability(), {"member_number": "99999"}, legacy_core_url, safe_clicks=_SAFE_CLICKS
+        _capability(), {"member_number": "99999"}, legacy_core_url,
+        nav_policy=nav_policy, safe_clicks=_SAFE_CLICKS,
     )
     assert isinstance(result, BusinessOutcome)
     assert result.code == "MEMBER_NOT_FOUND"
@@ -125,7 +135,9 @@ async def test_captured_landmarks_exclude_the_member_number(legacy_core_url: str
     assert all("12345" not in landmark for landmark in snapshot.landmarks)
 
 
-async def test_replay_recovers_from_slow_load(legacy_core_url: str) -> None:
+async def test_replay_recovers_from_slow_load(
+    legacy_core_url: str, nav_policy: NavigationPolicy
+) -> None:
     # The slow scenario delays the profile load; bounded waiting absorbs it and replay
     # still succeeds (a recoverable runtime condition, not a failure). Also exercises
     # the caller-owned surface seam on a real browser session.
@@ -135,7 +147,7 @@ async def test_replay_recovers_from_slow_load(legacy_core_url: str) -> None:
         await surface.goto(f"{legacy_core_url}/?scenario=slow")  # activate the scenario cookie
         result = await replay(
             _capability(), {"member_number": "54321"}, legacy_core_url,
-            safe_clicks=_SAFE_CLICKS, surface=surface,
+            nav_policy=nav_policy, safe_clicks=_SAFE_CLICKS, surface=surface,
         )
     finally:
         await surface.close()

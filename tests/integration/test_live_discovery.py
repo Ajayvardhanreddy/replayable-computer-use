@@ -21,7 +21,7 @@ from computer_use.model import (
     Sensitivity,
     Success,
 )
-from computer_use.safety import Policy, RiskClassifier
+from computer_use.safety import NavigationPolicy, Policy, RiskClassifier
 from computer_use.surface import PlaywrightSurface
 
 pytestmark = pytest.mark.live
@@ -47,7 +47,9 @@ def _spec() -> GoalSpec:
     )
 
 
-async def test_genuine_anthropic_discovery_then_replay(legacy_core_url: str) -> None:
+async def test_genuine_anthropic_discovery_then_replay(
+    legacy_core_url: str, nav_policy: NavigationPolicy
+) -> None:
     if not os.getenv("ANTHROPIC_API_KEY"):
         pytest.skip("ANTHROPIC_API_KEY required for --run-live")
     spec = _spec()
@@ -61,7 +63,7 @@ async def test_genuine_anthropic_discovery_then_replay(legacy_core_url: str) -> 
             ValueResolver({"member_number": "12345"}),
         )
         outcome = await discover(
-            AnthropicDiscoveryModel(), surface, kernel, spec, legacy_core_url
+            AnthropicDiscoveryModel(), surface, kernel, spec, legacy_core_url, nav_policy=nav_policy
         )
     finally:
         await surface.close()
@@ -70,7 +72,8 @@ async def test_genuine_anthropic_discovery_then_replay(legacy_core_url: str) -> 
     capability = compile_capability(outcome.trace, spec)
 
     result = await replay(
-        capability, {"member_number": "54321"}, legacy_core_url, safe_clicks=_SAFE_CLICKS
+        capability, {"member_number": "54321"}, legacy_core_url,
+        nav_policy=nav_policy, safe_clicks=_SAFE_CLICKS,
     )
     assert isinstance(result, Success)
     assert result.outputs["savings_balance"] == "312.45"

@@ -6,6 +6,8 @@ These use an injected fake surface so every branch is exercised deterministicall
 without a browser, and prove model_calls stays 0.
 """
 
+import os
+
 from computer_use.execution import replay
 from computer_use.model import (
     Capability,
@@ -23,6 +25,7 @@ from computer_use.model import (
     ParameterRef,
     ParamType,
     RiskClass,
+    SecretRef,
     Sensitivity,
     Step,
     Success,
@@ -30,6 +33,7 @@ from computer_use.model import (
     TargetDescriptor,
     TypeAction,
 )
+from computer_use.safety import EnvSecretProvider, NavigationPolicy
 from computer_use.surface import (
     SurfaceDriverError,
     SurfaceError,
@@ -39,6 +43,11 @@ from computer_use.surface import (
 )
 
 _SAFE = frozenset({"Search"})
+# The fake's URLs live under this scope, so navigation checks pass deterministically.
+_NAV = NavigationPolicy(
+    allowed_origins=frozenset({"http://legacy"}),
+    allowed_routes=frozenset({"/", "/workspace/inquiry", "/workspace/member/:member_number"}),
+)
 
 
 class _FakeSurface:
@@ -114,6 +123,9 @@ class _FakeSurface:
     async def current_route(self) -> str:
         return "/workspace/member/00000"
 
+    async def current_url(self) -> str:
+        return "http://legacy/workspace/member/00000"
+
     async def primary_heading(self) -> str | None:
         return self._heading
 
@@ -181,6 +193,7 @@ async def _run(surface: _FakeSurface, *, fallback: bool = False, timeout: int = 
         _capability(fallback=fallback),
         {"member_number": "12345"},
         "http://legacy",
+        nav_policy=_NAV,
         safe_clicks=_SAFE,
         surface=surface,
         resolve_timeout_ms=timeout,
@@ -277,3 +290,55 @@ async def test_checkpoint_failure_reports_observed_state() -> None:
     assert result.code is FailureCode.CHECKPOINT_FAILED
     assert result.observed is not None
     assert "Member Inquiry" in result.observed
+
+
+def _secret_capability() -> Capability:
+    return Capability(
+        id="member.authenticated_lookup",
+        version=1,
+        target=CapabilityTarget(vendor="legacy_core", application_family="core_banking"),
+        inputs={},
+        outputs={},
+        steps=[
+            Step(
+                id="s1",
+                action=TypeAction(value=SecretRef(name="legacy_password")),
+                target=TargetDescriptor(role="textbox", name="Password"),
+                risk=RiskClass.READ_ONLY,
+            )
+        ],
+        success_checkpoint=Condition(heading=Heading(role="heading", name="Member Profile")),
+    )
+
+
+async def test_replay_resolves_secret_through_the_provider_seam() -> None:
+    # A SecretRef step must actually execute in normal replay when a provider is
+    # supplied — and the raw secret is used transiently, never returned or persisted.
+    os.environ["LC_SECRET_LEGACY_PASSWORD"] = "CANARY_SECRET_ZZ"
+    try:
+        fake = _FakeSurface()
+        result = await replay(
+            _secret_capability(),
+            {},
+            "http://legacy",
+            nav_policy=_NAV,
+            safe_clicks=_SAFE,
+            surface=fake,
+            secrets=EnvSecretProvider(),
+        )
+        assert isinstance(result, Success)
+        assert ("Password", "CANARY_SECRET_ZZ") in fake.types  # the secret was actually typed
+        assert "CANARY_SECRET_ZZ" not in result.model_dump_json()  # not in the returned result
+    finally:
+        del os.environ["LC_SECRET_LEGACY_PASSWORD"]
+
+
+async def test_replay_without_provider_cannot_resolve_a_secret() -> None:
+    # No provider wired: a SecretRef step fails closed (never a blank or guessed value).
+    fake = _FakeSurface()
+    result = await replay(
+        _secret_capability(), {}, "http://legacy", nav_policy=_NAV, safe_clicks=_SAFE, surface=fake
+    )
+    assert isinstance(result, Failure)
+    assert result.code is FailureCode.POLICY_DENIED  # SECRET_UNAVAILABLE maps here
+    assert fake.types == []
