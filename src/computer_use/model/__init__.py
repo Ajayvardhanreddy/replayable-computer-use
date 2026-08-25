@@ -26,7 +26,14 @@ from .artifact import (
     TargetDescriptor,
     TypeAction,
 )
-from .enums import OutcomeClass, ParamType, PolicyEffect, RiskClass, Sensitivity
+from .enums import (
+    ControlOwner,
+    OutcomeClass,
+    ParamType,
+    PolicyEffect,
+    RiskClass,
+    Sensitivity,
+)
 from .events import EvidenceEvent
 from .proposals import ProposedAction, ProposedActionType
 from .results import (
@@ -56,6 +63,7 @@ __all__ = [
     "CapabilityTarget",
     "ClickAction",
     "Condition",
+    "ControlOwner",
     "DeclareSuccessAction",
     "DerivedValue",
     "Escalated",

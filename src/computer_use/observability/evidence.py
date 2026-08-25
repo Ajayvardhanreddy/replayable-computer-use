@@ -34,6 +34,11 @@ _ALLOWED_ATTRIBUTES: dict[str, frozenset[str]] = {
     "step_executed": frozenset({"action", "target", "risk", "value", "output"}),
     "step_rejected": frozenset({"code"}),
     "discovery_finished": frozenset({"model_calls", "stop_reason"}),
+    "control_transferred": frozenset(
+        {"from_owner", "to_owner", "epoch", "reason", "operator_id"}
+    ),
+    "human_action": frozenset({"epoch", "action", "target", "route", "value", "operator_id"}),
+    "intervention_raised": frozenset({"reason", "model_call"}),
 }
 
 
@@ -129,6 +134,71 @@ def discovery_finished_event(run_id: str, model_calls: int, stop_reason: str) ->
         run_id=run_id,
         ts=_now(),
         attributes={"model_calls": model_calls, "stop_reason": stop_reason},
+    )
+
+
+def control_transferred_event(
+    run_id: str,
+    from_owner: str,
+    to_owner: str,
+    epoch: int,
+    operator_id: str,
+    reason: str | None = None,
+) -> EvidenceEvent:
+    """Records an ownership transfer of the live session (automation <-> human)."""
+    return EvidenceEvent(
+        event="control_transferred",
+        run_id=run_id,
+        ts=_now(),
+        attributes={
+            "from_owner": from_owner,
+            "to_owner": to_owner,
+            "epoch": epoch,
+            "operator_id": operator_id,
+            "reason": reason,
+        },
+    )
+
+
+def intervention_raised_event(run_id: str, reason: str, model_call: int) -> EvidenceEvent:
+    """Records that a run paused for a human, with the stable reason and the model-call
+    index at which it happened. No model reasoning text is persisted."""
+    return EvidenceEvent(
+        event="intervention_raised",
+        run_id=run_id,
+        ts=_now(),
+        attributes={"reason": reason, "model_call": model_call},
+    )
+
+
+def human_action_event(
+    run_id: str,
+    epoch: int,
+    operator_id: str,
+    action: str,
+    target: TargetDescriptor,
+    route: str,
+    value_present: bool,
+) -> EvidenceEvent:
+    """Records a human operator action with safe metadata only.
+
+    The target is a structural fingerprint (role/name or cell relation) and the
+    route is an allowed-route pattern. Any value the human entered is recorded as a
+    presence token, never the raw value — human input crosses the same allowlist
+    boundary as everything else.
+    """
+    return EvidenceEvent(
+        event="human_action",
+        run_id=run_id,
+        ts=_now(),
+        attributes={
+            "epoch": epoch,
+            "operator_id": operator_id,
+            "action": action,
+            "target": _target_summary(target),
+            "route": route,
+            "value": "<redacted>" if value_present else None,
+        },
     )
 
 

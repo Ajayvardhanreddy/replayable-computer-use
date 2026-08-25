@@ -11,9 +11,11 @@ from __future__ import annotations
 from collections.abc import Awaitable
 from typing import Any, TypeVar, cast
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from playwright.async_api import (
     Browser,
+    BrowserContext,
     Frame,
     Locator,
     Page,
@@ -110,6 +112,23 @@ _HEADINGS_JS = """
 
 _BODY_TEXT_JS = "() => (document.body ? document.body.innerText : '')"
 
+# A blocking modal is identified by ARIA semantics, not by matching any specific
+# copy: a visible element with the dialog role marked aria-modal. This is a generic
+# structural signal for "an interactive state the deterministic flow does not model",
+# never a check for particular dialog text.
+_BLOCKING_DIALOG_JS = """
+() => {
+  const dialogs = [...document.querySelectorAll('[role=dialog][aria-modal=true]')];
+  return dialogs.some((d) => {
+    if (d.hasAttribute('hidden')) return false;
+    const style = window.getComputedStyle(d);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = d.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  });
+}
+"""
+
 # Retries for transient "execution context destroyed" errors during navigation.
 _EVAL_RETRIES = 40
 # How long to wait for a table cell to appear (e.g. while a page finishes loading).
@@ -162,14 +181,39 @@ class PlaywrightSurface:
         self._headless = headless
         self._pw: Playwright | None = None
         self._browser: Browser | None = None
+        self._context: BrowserContext | None = None
         self._page: Page | None = None
+        # A stable identifier for this session, independent of any driver internals.
+        # It is assigned once at construction and never changes, so a same-session
+        # handoff can be asserted without depending on private Playwright handles.
+        self._session_id = uuid4().hex
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
+    def is_live(self) -> bool:
+        return self._page is not None
+
+    @property
+    def context(self) -> BrowserContext:
+        """The live browser context (same object across a same-session handoff)."""
+        if self._context is None:
+            raise SurfaceError("surface not started")
+        return self._context
+
+    @property
+    def page(self) -> Page:
+        """The live page (same object across a same-session handoff)."""
+        return self._pg()
 
     async def start(self) -> None:
         try:
             self._pw = await async_playwright().start()
             self._browser = await self._pw.chromium.launch(headless=self._headless)
-            context = await self._browser.new_context()
-            self._page = await context.new_page()
+            self._context = await self._browser.new_context()
+            self._page = await self._context.new_page()
         except PlaywrightError as error:
             raise SurfaceDriverError(str(error)) from error
 
@@ -280,9 +324,15 @@ class PlaywrightSurface:
         locator = await self._unique_locator(target)
         await self._act(locator.click())
 
-    async def type_text(self, target: TargetDescriptor, text: str) -> None:
+    async def type_text(
+        self, target: TargetDescriptor, text: str, *, submit: bool = False
+    ) -> None:
         locator = await self._unique_locator(target)
         await self._act(locator.fill(text))
+        if submit:
+            # Submit the field's form (implicit submission on Enter). Used when a
+            # control has no separate submit button.
+            await self._act(locator.press("Enter"))
 
     async def extract(self, target: TargetDescriptor) -> str:
         if target.table_cell is not None:
@@ -346,6 +396,12 @@ class PlaywrightSurface:
                 return True
         return False
 
+    async def has_blocking_dialog(self) -> bool:
+        for frame in self._pg().frames:
+            if cast(bool, await self._safe_eval(frame, _BLOCKING_DIALOG_JS)):
+                return True
+        return False
+
     async def current_route(self) -> str:
         return urlparse(self._pg().url).path
 
@@ -355,8 +411,23 @@ class PlaywrightSurface:
     async def wait_settled(self) -> None:
         try:
             await self._pg().wait_for_load_state("networkidle")
+            # A subframe redirect (POST -> 303 -> GET inside an iframe) can still be in
+            # flight when the page reports networkidle. Wait until frame URLs stop
+            # changing so an action does not land on a document about to be replaced.
+            await self._wait_frames_stable()
         except PlaywrightError:
             pass
+
+    async def _wait_frames_stable(self, *, poll_ms: int = 50, budget_ms: int = 2000) -> None:
+        previous = tuple(frame.url for frame in self._pg().frames)
+        waited = 0
+        while waited < budget_ms:
+            await self._pg().wait_for_timeout(poll_ms)
+            current = tuple(frame.url for frame in self._pg().frames)
+            if current == previous:
+                return  # no navigation in flight
+            previous = current
+            waited += poll_ms
 
     async def primary_heading(self) -> str | None:
         for frame in self._pg().frames:
@@ -392,3 +463,4 @@ class PlaywrightSurface:
             self._browser = None
             self._pw = None
             self._page = None
+            self._context = None

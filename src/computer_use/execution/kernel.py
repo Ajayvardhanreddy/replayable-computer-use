@@ -37,6 +37,8 @@ from computer_use.safety import (
 )
 from computer_use.surface import Candidate, Surface
 
+from .lease import ControlLease, ControlLeaseError
+
 _EXECUTABLE = frozenset(
     {ProposedActionType.CLICK, ProposedActionType.TYPE, ProposedActionType.EXTRACT}
 )
@@ -55,6 +57,7 @@ class RejectionCode(StrEnum):
     UNKNOWN_PARAMETER = "UNKNOWN_PARAMETER"
     UNSUPPORTED_VALUE = "UNSUPPORTED_VALUE"
     SECRET_UNAVAILABLE = "SECRET_UNAVAILABLE"
+    CONTROL_NOT_OWNED = "CONTROL_NOT_OWNED"
 
 
 class KernelRejection(Exception):
@@ -125,15 +128,23 @@ class TrustedKernel:
         classifier: RiskClassifier,
         values: ValueResolver,
         confirmation: ConfirmationPolicy | None = None,
+        lease: ControlLease | None = None,
     ) -> None:
         self._surface = surface
         self._policy = policy
         self._classifier = classifier
         self._values = values
         self._confirmation = confirmation if confirmation is not None else ConfirmationPolicy()
+        # When a lease is present, automation may act only while it owns the session
+        # at the expected epoch; otherwise every side effect fails closed. Absent a
+        # lease the kernel behaves as an unguarded single-owner authority path.
+        self._lease = lease
 
     async def execute(
-        self, proposal: ProposedAction, candidates: dict[str, Candidate]
+        self,
+        proposal: ProposedAction,
+        candidates: dict[str, Candidate],
+        epoch: int | None = None,
     ) -> KernelExecution:
         """Discovery entry point: validate + resolve a model proposal, then act."""
         action = proposal.action
@@ -146,10 +157,10 @@ class TrustedKernel:
             raise KernelRejection(RejectionCode.UNKNOWN_CANDIDATE, proposal.candidate_id)
         target = _descriptor_from_candidate(candidate)
         return await self._authorize_and_execute(
-            action, target, proposal.value, proposal.output, operation_id=None
+            action, target, proposal.value, proposal.output, operation_id=None, epoch=epoch
         )
 
-    async def execute_step(self, step: Step) -> KernelExecution:
+    async def execute_step(self, step: Step, epoch: int | None = None) -> KernelExecution:
         """Replay entry point: execute a compiled step through the same authority path."""
         if step.target is None:
             raise KernelRejection(RejectionCode.UNRESOLVABLE_CANDIDATE, "step has no target")
@@ -164,8 +175,17 @@ class TrustedKernel:
         else:
             raise KernelRejection(RejectionCode.NOT_EXECUTABLE, step.action.type)
         return await self._authorize_and_execute(
-            action, step.target, value, step.output, operation_id=step.id
+            action, step.target, value, step.output, operation_id=step.id, epoch=epoch
         )
+
+    def _assert_may_act(self, epoch: int | None) -> None:
+        """Fail closed unless automation currently owns the session at ``epoch``."""
+        if self._lease is None:
+            return
+        try:
+            self._lease.assert_automation_may_act(epoch)
+        except ControlLeaseError as error:
+            raise KernelRejection(RejectionCode.CONTROL_NOT_OWNED, str(error)) from error
 
     async def _authorize_and_execute(
         self,
@@ -174,7 +194,12 @@ class TrustedKernel:
         value: ValueRef | None,
         output: str | None,
         operation_id: str | None,
+        epoch: int | None = None,
     ) -> KernelExecution:
+        # Ownership gate first: while a human holds the lease (or the epoch is stale),
+        # automation touches nothing on the surface — not even target resolution.
+        self._assert_may_act(epoch)
+
         # Policy scope. This gates on action type today; a target-scoped rule should
         # gate on the resolved control (see _resolve_target), not the primary descriptor.
         decision = self._policy.check(action, target)
@@ -199,6 +224,10 @@ class TrustedKernel:
             # approved; an irreversible action is never auto-approved.
             if risk is RiskClass.IRREVERSIBLE or not self._confirmation.is_approved(operation_id):
                 raise KernelRejection(RejectionCode.RISK_CONFIRMATION_REQUIRED, risk.value)
+
+        # Re-check ownership immediately before the side effect: a human may have
+        # taken over while the target was being resolved, superseding this epoch.
+        self._assert_may_act(epoch)
 
         # Execute.
         extracted: str | None = None

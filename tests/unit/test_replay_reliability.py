@@ -120,6 +120,9 @@ class _FakeSurface:
     async def has_heading(self, name: str) -> bool:
         return name == self._heading
 
+    async def has_blocking_dialog(self) -> bool:
+        return False
+
     async def current_route(self) -> str:
         return "/workspace/member/00000"
 

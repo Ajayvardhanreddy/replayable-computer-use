@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from .evidence import (
     EvidenceStore,
+    control_transferred_event,
     discovery_finished_event,
     discovery_started_event,
+    human_action_event,
+    intervention_raised_event,
     persistable_result,
     step_executed_event,
     step_rejected_event,
@@ -23,8 +26,11 @@ __all__ = [
     "EvidenceStore",
     "FailureEvidence",
     "ScreenshotPolicy",
+    "control_transferred_event",
     "discovery_finished_event",
     "discovery_started_event",
+    "human_action_event",
+    "intervention_raised_event",
     "persistable_result",
     "step_executed_event",
     "step_rejected_event",

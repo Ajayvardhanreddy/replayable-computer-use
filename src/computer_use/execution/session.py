@@ -1,0 +1,548 @@
+"""Resumable deterministic replay driven by a single trusted kernel.
+
+A ``ReplaySession`` executes a compiled Capability step by step against one live
+session, with no model in the loop (``model_calls`` is always 0). It is the unit
+that makes same-session human handoff possible: when an unhandled blocking state
+is observed the session pauses in place — the live surface stays open and the
+cursor is preserved — and reports an intervention. After a human resolves the
+state and returns control, the session reconciles the observable page against the
+capability's own checkpoints before it resumes; it never blindly advances to the
+next step.
+
+Runtime conditions are handled deliberately: a transient surface condition is
+retried under a bounded budget, a declared business outcome is a legitimate
+domain answer, a satisfied checkpoint continues, and anything else stops with a
+typed Failure. No raw driver exception crosses this boundary.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from uuid import uuid4
+
+from computer_use.model import (
+    BusinessOutcome,
+    Capability,
+    Condition,
+    Escalated,
+    Failure,
+    FailureCode,
+    OutcomeClass,
+    OutputSpec,
+    ParamType,
+    PolicyEffect,
+    ProposedActionType,
+    RunResult,
+    Step,
+    Success,
+)
+from computer_use.safety import (
+    NavigationPolicy,
+    Policy,
+    RiskClassifier,
+    SecretProvider,
+    route_label,
+    route_matches,
+)
+from computer_use.surface import (
+    PlaywrightSurface,
+    Surface,
+    SurfaceError,
+    SurfaceTransientError,
+    TargetAmbiguousError,
+    TargetNotFoundError,
+)
+
+from .kernel import KernelExecution, KernelRejection, RejectionCode, TrustedKernel, ValueResolver
+from .lease import ControlLease
+
+# A stable, generic reason for an observed blocking state the deterministic artifact
+# does not model. It is a plain string here so the execution layer stays free of the
+# handoff layer; the operator surface maps it onto its typed InterventionReason.
+UNKNOWN_DIALOG = "UNKNOWN_DIALOG"
+
+_REPLAY_ACTIONS = frozenset(
+    {ProposedActionType.CLICK, ProposedActionType.TYPE, ProposedActionType.EXTRACT}
+)
+_RESOLVE_TIMEOUT_MS = 5000
+# Bounded recovery for a classified transient surface condition.
+_TRANSIENT_RETRIES = 3
+_RETRY_BACKOFF_MS = 200
+
+# Kernel authorization rejections mapped to the public failure taxonomy. Codes that
+# a statically-validated artifact cannot reach (missing value/output, non-executable)
+# default to POLICY_DENIED: the kernel refused to authorize the step. An ambiguous or
+# missing locator is returned as a fail-closed typed Failure rather than acted on.
+# CONTROL_NOT_OWNED also maps here: automation acting without the lease is refused.
+_REJECTION_TO_FAILURE = {
+    RejectionCode.TARGET_MISSING: FailureCode.TARGET_MISSING,
+    RejectionCode.LOCATOR_AMBIGUOUS: FailureCode.LOCATOR_AMBIGUOUS,
+    RejectionCode.POLICY_DENIED: FailureCode.POLICY_DENIED,
+    RejectionCode.RISK_CONFIRMATION_REQUIRED: FailureCode.POLICY_DENIED,
+    RejectionCode.CONTROL_NOT_OWNED: FailureCode.POLICY_DENIED,
+}
+
+
+@dataclass(frozen=True)
+class InterventionSignal:
+    """Neutral handle to a paused session for the handoff layer to route.
+
+    Carries only stable identifiers and a reason code — no page content. The
+    handoff layer adds sanitized structural evidence when it builds the request.
+    """
+
+    reason: str
+    run_id: str
+    capability: str
+    version: int
+    step_id: str | None
+    intervention_id: str
+    epoch: int
+
+
+def _failure_code(code: RejectionCode) -> FailureCode:
+    return _REJECTION_TO_FAILURE.get(code, FailureCode.POLICY_DENIED)
+
+
+def _surface_failure(run_id: str, error: SurfaceError, step_id: str | None) -> Failure:
+    """Map any Surface-level error to a typed hard Failure; nothing raw escapes.
+
+    A resolve/act race (the DOM changes between count and click) surfaces as a
+    not-found or ambiguous target and is reported as such; everything else is a
+    driver failure or exhausted transient.
+    """
+    if isinstance(error, TargetNotFoundError):
+        code = FailureCode.TARGET_MISSING
+    elif isinstance(error, TargetAmbiguousError):
+        code = FailureCode.LOCATOR_AMBIGUOUS
+    else:
+        code = FailureCode.SURFACE_ERROR
+    return Failure(
+        run_id=run_id,
+        code=code,
+        step_id=step_id,
+        # No raw driver text (it can embed the URL / a path parameter); the code is
+        # the signal.
+        observed="surface error during replay",
+        retryable=False,
+        model_calls=0,
+    )
+
+
+def _nav_denied(
+    run_id: str, nav_policy: NavigationPolicy, url: str, step_id: str | None
+) -> Failure | None:
+    """A typed Failure if the URL is out of navigation scope, else None."""
+    decision = nav_policy.check(url)
+    if decision.effect is PolicyEffect.DENY:
+        return Failure(
+            run_id=run_id,
+            code=FailureCode.POLICY_DENIED,
+            step_id=step_id,
+            # Structural rule only. The raw reason embeds the concrete URL/path (a
+            # member id), so it must not reach a persisted failure.
+            observed=f"navigation denied: {decision.rule}",
+            retryable=False,
+            model_calls=0,
+        )
+    return None
+
+
+def _coerce_output(value: str, spec: OutputSpec | None) -> str:
+    if spec is not None and spec.type is ParamType.DECIMAL:
+        return value.replace("$", "").replace(",", "").strip()
+    return value
+
+
+async def _matches(surface: Surface, condition: Condition) -> bool:
+    """Evaluate a live condition. Every set matcher is required (AND); ``any_of`` is
+    an OR subgroup. Unsupported matchers raise rather than silently returning False."""
+    checks: list[bool] = []
+    if condition.text_present is not None:
+        checks.append(await surface.has_text(condition.text_present))
+    if condition.heading is not None:
+        checks.append(await surface.has_heading(condition.heading.name))
+    if condition.route_pattern is not None:
+        checks.append(route_matches(condition.route_pattern, await surface.current_route()))
+    if condition.any_of is not None:
+        checks.append(any([await _matches(surface, sub) for sub in condition.any_of]))
+    if condition.output_present is not None:
+        raise ValueError("output_present is a success-checkpoint matcher, not a live condition")
+    if not checks:
+        raise ValueError("condition has no evaluable matcher")
+    return all(checks)
+
+
+async def _success_satisfied(
+    surface: Surface, checkpoint: Condition, outputs: dict[str, str]
+) -> bool:
+    if checkpoint.output_present is not None and checkpoint.output_present not in outputs:
+        return False
+    has_live = (
+        checkpoint.text_present is not None
+        or checkpoint.heading is not None
+        or checkpoint.route_pattern is not None
+        or checkpoint.any_of is not None
+    )
+    if has_live:
+        live = checkpoint.model_copy(update={"output_present": None})
+        if not await _matches(surface, live):
+            return False
+    return True
+
+
+async def _observe(surface: Surface, routes: frozenset[str]) -> str:
+    """A short, structural description of the current state for failure diagnostics.
+
+    The route is recorded as its allowed-route *pattern*, never the concrete path, so
+    a sensitive path parameter (a member id) is not persisted.
+    """
+    try:
+        heading = await surface.primary_heading()
+        route = await surface.current_route()
+    except SurfaceError:
+        return "observed state unavailable"
+    return f"heading={heading!r} route={route_label(route, routes)!r}"
+
+
+async def _resolve_step(surface: Surface, step: Step, timeout_ms: int) -> tuple[str, str | None]:
+    """Race the step's business outcomes against its checkpoint after execution.
+
+    A transient condition during polling is treated as not-yet-settled and the poll
+    continues within the budget; a non-transient surface error propagates.
+    """
+    if not step.outcomes and step.postcondition is None:
+        return ("continue", None)
+    waited = 0
+    while True:
+        try:
+            for outcome in step.outcomes:
+                if outcome.outcome_class is OutcomeClass.BUSINESS_OUTCOME and await _matches(
+                    surface, outcome.detector
+                ):
+                    return ("outcome", outcome.code)
+            if step.postcondition is None or await _matches(surface, step.postcondition):
+                return ("continue", None)
+        except SurfaceTransientError:
+            pass  # mid-navigation; keep polling within budget
+        if waited >= timeout_ms:
+            return ("failed", None)
+        await asyncio.sleep(0.1)
+        waited += 100
+
+
+class ReplaySession:
+    """Drives a compiled Capability against one live surface, pausable for handoff.
+
+    The caller may inject a surface (then it owns the surface's lifecycle — the seam
+    that lets a human operate the same session while replay is paused); otherwise the
+    session creates and closes its own. A ``ControlLease`` guards the kernel so
+    automation acts only while it owns the session at the current epoch.
+    """
+
+    def __init__(
+        self,
+        capability: Capability,
+        inputs: dict[str, str],
+        target_url: str,
+        *,
+        nav_policy: NavigationPolicy,
+        safe_clicks: frozenset[str] = frozenset(),
+        surface: Surface | None = None,
+        resolve_timeout_ms: int = _RESOLVE_TIMEOUT_MS,
+        secrets: SecretProvider | None = None,
+        lease: ControlLease | None = None,
+    ) -> None:
+        self._capability = capability
+        self._target_url = target_url
+        self._nav_policy = nav_policy
+        self._resolve_timeout_ms = resolve_timeout_ms
+        self.run_id = f"run_{uuid4().hex[:8]}"
+        self.owns_surface = surface is None
+        self.surface: Surface = surface if surface is not None else PlaywrightSurface()
+        self.lease = lease if lease is not None else ControlLease()
+        self._kernel = TrustedKernel(
+            self.surface,
+            Policy(allowed_actions=_REPLAY_ACTIONS),
+            RiskClassifier(safe_click_names=safe_clicks),
+            ValueResolver(inputs, secrets),
+            lease=self.lease,
+        )
+        self._outputs: dict[str, str] = {}
+        self._cursor = 0
+        self.pending: InterventionSignal | None = None
+
+    @property
+    def nav_policy(self) -> NavigationPolicy:
+        return self._nav_policy
+
+    @property
+    def _routes(self) -> frozenset[str]:
+        return self._nav_policy.allowed_routes
+
+    async def current_route(self) -> str:
+        return await self.surface.current_route()
+
+    def route_label(self, path: str) -> str:
+        """The structural route pattern for a path (never the concrete PII path)."""
+        return route_label(path, self._routes)
+
+    async def start(self) -> Failure | None:
+        """Start an owned surface and navigate to the in-scope entry point.
+
+        Returns a typed Failure if the entry is out of scope or the driver fails,
+        else None (ready to advance).
+        """
+        try:
+            if self.owns_surface:
+                await self.surface.start()
+            entry = self._target_url.rstrip("/") + "/"
+            denied = _nav_denied(self.run_id, self._nav_policy, entry, None)
+            if denied is not None:
+                return denied
+            await self.surface.goto(entry)
+        except SurfaceError as error:
+            return _surface_failure(self.run_id, error, None)
+        return None
+
+    async def _execute_step(self, step: Step) -> KernelExecution:
+        """Execute a step, retrying only a classified transient condition within budget.
+
+        The lease epoch is captured immediately before each attempt so that a human
+        takeover between scheduling and dispatch invalidates the automation action.
+        """
+        last: SurfaceTransientError | None = None
+        for _ in range(_TRANSIENT_RETRIES):
+            try:
+                return await self._kernel.execute_step(step, epoch=self.lease.epoch)
+            except SurfaceTransientError as transient:
+                last = transient
+                await asyncio.sleep(_RETRY_BACKOFF_MS / 1000)
+        assert last is not None
+        raise last
+
+    def _escalate(self, reason: str, step: Step) -> Escalated:
+        """Pause in place and report an intervention; the surface stays open."""
+        if self.pending is None or self.pending.step_id != step.id:
+            self.pending = InterventionSignal(
+                reason=reason,
+                run_id=self.run_id,
+                capability=self._capability.id,
+                version=self._capability.version,
+                step_id=step.id,
+                intervention_id=f"int_{uuid4().hex[:8]}",
+                epoch=self.lease.epoch,
+            )
+        return Escalated(
+            run_id=self.run_id,
+            code=reason,
+            step_id=step.id,
+            intervention_id=self.pending.intervention_id,
+            model_calls=0,
+        )
+
+    async def advance(self) -> RunResult:
+        """Run steps from the current cursor to a terminal result or an intervention.
+
+        Returns Success / BusinessOutcome / Failure when the run resolves, or an
+        Escalated (leaving the session paused and resumable) when a blocking state
+        the artifact does not model is observed before the next step executes.
+        """
+        try:
+            steps = self._capability.steps
+            while self._cursor < len(steps):
+                step = steps[self._cursor]
+                await self.surface.wait_settled()
+                denied = _nav_denied(
+                    self.run_id, self._nav_policy, await self.surface.current_url(), step.id
+                )
+                if denied is not None:
+                    return denied
+                # Stop before executing another step if an unhandled blocking state is
+                # present: it is not a known business outcome or recoverable condition,
+                # so acting now would be unsafe. Route it to a human instead.
+                if await self.surface.has_blocking_dialog():
+                    return self._escalate(UNKNOWN_DIALOG, step)
+                try:
+                    execution = await self._execute_step(step)
+                    if step.output is not None and execution.extracted is not None:
+                        self._outputs[step.output] = _coerce_output(
+                            execution.extracted, self._capability.outputs.get(step.output)
+                        )
+                    # An action may navigate; re-check scope on the resulting page
+                    # before reading it for an outcome or checkpoint.
+                    await self.surface.wait_settled()
+                    post = _nav_denied(
+                        self.run_id, self._nav_policy, await self.surface.current_url(), step.id
+                    )
+                    if post is not None:
+                        return post
+                    kind, code = await _resolve_step(self.surface, step, self._resolve_timeout_ms)
+                except KernelRejection as rejection:
+                    return Failure(
+                        run_id=self.run_id,
+                        code=_failure_code(rejection.code),
+                        step_id=step.id,
+                        observed=await _observe(self.surface, self._routes),
+                        retryable=False,
+                        model_calls=0,
+                    )
+                except SurfaceError as error:
+                    # Driver failure, exhausted transient, or a mid-act target race.
+                    return _surface_failure(self.run_id, error, step.id)
+                if kind == "outcome":
+                    return BusinessOutcome(
+                        run_id=self.run_id,
+                        capability=self._capability.id,
+                        code=code or "",
+                        model_calls=0,
+                    )
+                if kind == "failed":
+                    return Failure(
+                        run_id=self.run_id,
+                        code=FailureCode.CHECKPOINT_FAILED,
+                        step_id=step.id,
+                        expected=repr(step.postcondition),
+                        observed=await _observe(self.surface, self._routes),
+                        retryable=False,
+                        model_calls=0,
+                    )
+                self._cursor += 1
+            return await self._finish()
+        except SurfaceError as error:
+            # Success-check / navigation errors not tied to a specific step.
+            return _surface_failure(self.run_id, error, None)
+
+    async def _finish(self) -> RunResult:
+        denied = _nav_denied(
+            self.run_id, self._nav_policy, await self.surface.current_url(), None
+        )
+        if denied is not None:
+            return denied
+        if await _success_satisfied(
+            self.surface, self._capability.success_checkpoint, self._outputs
+        ):
+            return Success(
+                run_id=self.run_id,
+                capability=self._capability.id,
+                version=self._capability.version,
+                outputs=dict(self._outputs),
+                model_calls=0,
+            )
+        return Failure(
+            run_id=self.run_id,
+            code=FailureCode.CHECKPOINT_FAILED,
+            step_id=None,
+            expected=repr(self._capability.success_checkpoint),
+            observed=await _observe(self.surface, self._routes),
+            retryable=False,
+            model_calls=0,
+        )
+
+    def _nearest_prior_checkpoint(self) -> tuple[Step, Condition] | None:
+        """The closest already-executed step below the cursor that has a postcondition."""
+        for index in range(self._cursor - 1, -1, -1):
+            step = self._capability.steps[index]
+            if step.postcondition is not None:
+                return step, step.postcondition
+        return None
+
+    async def assess_reconciliation(self) -> RunResult | None:
+        """Judge whether automation may safely resume, without changing ownership.
+
+        Returns ``None`` when it is safe to resume from the current cursor. Otherwise
+        it fails closed: an ``Escalated`` when the blocking state remains (the session
+        stays paused and resumable, so control should be retained by the human), or a
+        typed ``Failure`` when navigation scope is now invalid, there is no prior
+        checkpoint to trust, or the nearest prior checkpoint no longer holds. The
+        resume cursor is derived from the capability's own checkpoints against the live
+        page, never from ``cursor + 1``. It polls within the resolve budget so a human
+        action that navigates is allowed to settle before its state is judged.
+        """
+        pending = self.pending
+        if pending is None or self._cursor >= len(self._capability.steps):
+            return None  # nothing paused; resuming is a normal advance/finish
+        step = self._capability.steps[self._cursor]
+        checkpoint = self._nearest_prior_checkpoint()
+        if checkpoint is None:
+            # No trustworthy established state to reconcile against: do not resume.
+            self.pending = None
+            return Failure(
+                run_id=self.run_id,
+                code=FailureCode.CHECKPOINT_FAILED,
+                step_id=step.id,
+                expected="a prior checkpoint to reconcile against",
+                retryable=False,
+                model_calls=0,
+            )
+        checkpoint_step, condition = checkpoint
+        try:
+            await self.surface.wait_settled()
+            denied = _nav_denied(
+                self.run_id, self._nav_policy, await self.surface.current_url(), step.id
+            )
+            if denied is not None:
+                self.pending = None
+                return denied
+            dialog_present, checkpoint_holds = await self._await_reconciliation(condition)
+        except SurfaceError as error:
+            self.pending = None
+            return _surface_failure(self.run_id, error, step.id)
+        if dialog_present:
+            # The human did not clear the blocking state; stay paused/resumable.
+            return self._escalate(pending.reason, step)
+        if not checkpoint_holds:
+            # The established checkpoint no longer holds (the page moved during human
+            # control): refuse to blindly run the pending step.
+            self.pending = None
+            return Failure(
+                run_id=self.run_id,
+                code=FailureCode.CHECKPOINT_FAILED,
+                step_id=checkpoint_step.id,
+                expected=repr(condition),
+                observed=await _observe(self.surface, self._routes),
+                retryable=False,
+                model_calls=0,
+            )
+        return None  # reconciled: the checkpoint holds and the blocking state is gone
+
+    async def resume_from_cursor(self) -> RunResult:
+        """Continue automation from the current cursor after a successful reconcile."""
+        self.pending = None
+        return await self.advance()
+
+    async def _await_reconciliation(self, condition: Condition) -> tuple[bool, bool]:
+        """Poll until the blocking state clears and the checkpoint holds, or budget ends.
+
+        Returns ``(dialog_present, checkpoint_holds)`` describing the final observed
+        state so the caller can distinguish "still blocked" from "checkpoint failed".
+        """
+        waited = 0
+        dialog_present = True
+        checkpoint_holds = False
+        while True:
+            try:
+                dialog_present = await self.surface.has_blocking_dialog()
+                checkpoint_holds = (not dialog_present) and await _matches(self.surface, condition)
+            except SurfaceTransientError:
+                pass  # mid-navigation after the human action; keep polling
+            if checkpoint_holds or waited >= self._resolve_timeout_ms:
+                return dialog_present, checkpoint_holds
+            await asyncio.sleep(0.1)
+            waited += 100
+
+    async def run_to_completion(self) -> RunResult:
+        """Advance to a terminal result. A pause (Escalated) is terminal here: without
+        an operator wired to take over, the intervention is reported and the run ends."""
+        opened = await self.start()
+        if opened is not None:
+            return opened
+        return await self.advance()
+
+    async def close(self) -> None:
+        if self.owns_surface:
+            try:
+                await self.surface.close()
+            except SurfaceError:
+                pass  # a close error must never mask the RunResult

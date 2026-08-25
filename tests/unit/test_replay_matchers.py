@@ -3,7 +3,7 @@ none is silently ignored, and route matching is a narrow deterministic form."""
 
 import pytest
 
-from computer_use.execution.replay import _matches, _success_satisfied
+from computer_use.execution.session import _matches, _success_satisfied
 from computer_use.model import Condition, Heading
 from computer_use.safety import route_matches
 
