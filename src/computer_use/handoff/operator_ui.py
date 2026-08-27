@@ -190,6 +190,44 @@ def render_intervention(
     )
 
 
+def render_approval_request(
+    *,
+    action: str,
+    target: str,
+    risk: str,
+    context: str | None = None,
+    console: Console | None = None,
+) -> None:
+    """The consequential-write authorization panel shown during discovery.
+
+    The model has proposed a write it cannot authorize; a human must approve this exact
+    action. Structural fields only — the action, the resolved target, the software-derived
+    risk, and the current landmark — never a model explanation and never a raw value. Same
+    framed, amber presentation as the intervention panel so the risk gate reads consistently.
+    """
+    rows = [("Action", action), ("Target", target), ("Risk", risk)]
+    if context:
+        rows.append(("Context", context))
+    body: list[RenderableType] = [
+        _kv(rows),
+        Text(""),
+        Text(
+            "The model cannot authorize this — a human must approve this exact action.",
+            style=WARN,
+        ),
+    ]
+    (console or _console).print(
+        Panel(
+            Group(*body),
+            title=Text("AUTHORIZATION REQUIRED  ·  consequential write", style=f"bold {WARN}"),
+            border_style=WARN,
+            box=ROUNDED,
+            expand=False,
+            padding=(1, 2),
+        )
+    )
+
+
 def render_observed(facts: InterventionFacts, *, console: Console | None = None) -> None:
     """``inspect``: a fresh structural read of the current live state (route, heading, blocker,
     blocker controls). No model, no screenshot — just the live Surface described structurally."""

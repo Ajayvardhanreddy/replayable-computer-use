@@ -43,7 +43,6 @@
       "postcondition": null,
       "outcomes": [],
       "output": null,
-      "read_back": null,
       "verification": null
     },
     {
@@ -73,7 +72,6 @@
       },
       "outcomes": [],
       "output": null,
-      "read_back": null,
       "verification": null
     },
     {
@@ -103,7 +101,6 @@
       },
       "outcomes": [],
       "output": null,
-      "read_back": null,
       "verification": null
     },
     {
@@ -131,9 +128,20 @@
         "output_present": null,
         "any_of": null
       },
-      "outcomes": [],
+      "outcomes": [
+        {
+          "code": "ACCOUNT_ALREADY_EXISTS",
+          "outcome_class": "business_outcome",
+          "detector": {
+            "text_present": "A sub-account of this type already exists.",
+            "heading": null,
+            "route_pattern": null,
+            "output_present": null,
+            "any_of": null
+          }
+        }
+      ],
       "output": null,
-      "read_back": null,
       "verification": {
         "navigate": [
           {
@@ -163,7 +171,6 @@
             },
             "outcomes": [],
             "output": null,
-            "read_back": null,
             "verification": null
           },
           {
@@ -188,7 +195,6 @@
             "postcondition": null,
             "outcomes": [],
             "output": null,
-            "read_back": null,
             "verification": null
           },
           {
@@ -218,7 +224,6 @@
             },
             "outcomes": [],
             "output": null,
-            "read_back": null,
             "verification": null
           }
         ],
@@ -260,7 +265,6 @@
           "postcondition": null,
           "outcomes": [],
           "output": "sub_account_status",
-          "read_back": null,
           "verification": null
         }
       }

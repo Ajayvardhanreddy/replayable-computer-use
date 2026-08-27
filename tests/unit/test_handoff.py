@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from computer_use.execution import (
     ControlLease,
+    ControlLeaseError,
     KernelRejection,
     RejectionCode,
     ReplaySession,
@@ -124,6 +125,9 @@ class _HandoffSurface:
 
     async def current_url(self) -> str:
         return self.url
+
+    async def scope_urls(self) -> list[str]:
+        return [await self.current_url()]
 
     async def primary_heading(self) -> str | None:
         return self.heading
@@ -268,6 +272,29 @@ def _kernel(surface: object, lease: ControlLease) -> TrustedKernel:
         ValueResolver({"x": "value"}),
         lease=lease,
     )
+
+
+def test_lease_rejects_double_take() -> None:
+    # A control lease is a state machine: only a genuine ownership change is legal. A
+    # second take (human -> human) is not a real hand-off and must not advance the epoch.
+    lease = ControlLease()
+    lease.to_human()  # automation -> human, epoch 1
+    try:
+        lease.to_human()
+        raise AssertionError("expected a rejected same-owner transition")
+    except ControlLeaseError:
+        pass
+    assert lease.epoch == 1  # the rejected transition did not advance the epoch
+
+
+def test_lease_rejects_double_release() -> None:
+    lease = ControlLease()  # starts owned by automation at epoch 0
+    try:
+        lease.to_automation()  # automation -> automation
+        raise AssertionError("expected a rejected same-owner transition")
+    except ControlLeaseError:
+        pass
+    assert lease.epoch == 0
 
 
 async def test_automation_cannot_act_while_human_owns() -> None:

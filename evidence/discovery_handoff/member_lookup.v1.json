@@ -43,7 +43,6 @@
       "postcondition": null,
       "outcomes": [],
       "output": null,
-      "read_back": null,
       "verification": null
     },
     {
@@ -85,7 +84,6 @@
         }
       ],
       "output": null,
-      "read_back": null,
       "verification": null
     },
     {
@@ -109,7 +107,6 @@
       "postcondition": null,
       "outcomes": [],
       "output": "savings_balance",
-      "read_back": null,
       "verification": null
     }
   ],

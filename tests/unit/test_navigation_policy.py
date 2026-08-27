@@ -53,6 +53,27 @@ def test_out_of_scope_route_blocked() -> None:
     assert decision.rule == "navigation_route"
 
 
+def test_check_all_denies_out_of_scope_subframe_origin() -> None:
+    # The workspace runs in an iframe: an in-scope top page must not mask an out-of-scope
+    # subframe that a redirect drove to another origin.
+    urls = ["http://localhost:8000/", "http://evil.example/workspace/inquiry"]
+    decision = _policy().check_all(urls)
+    assert decision.effect is PolicyEffect.DENY
+    assert decision.rule == "navigation_origin"
+
+
+def test_check_all_denies_out_of_scope_subframe_route() -> None:
+    urls = ["http://localhost:8000/", "http://localhost:8000/admin/settings"]
+    decision = _policy().check_all(urls)
+    assert decision.effect is PolicyEffect.DENY
+    assert decision.rule == "navigation_route"
+
+
+def test_check_all_allows_when_every_frame_is_in_scope() -> None:
+    urls = ["http://localhost:8000/", "http://localhost:8000/workspace/member/54321"]
+    assert _policy().check_all(urls).effect is PolicyEffect.ALLOW
+
+
 def test_param_route_matches_exactly_one_segment() -> None:
     ok = _policy().check("http://localhost:8000/workspace/member/54321")
     assert ok.effect is PolicyEffect.ALLOW
@@ -163,6 +184,9 @@ class _MemberPageSurface:
 
     async def current_url(self) -> str:
         return f"http://localhost:8000/workspace/member/{self._member}"
+
+    async def scope_urls(self) -> list[str]:
+        return [await self.current_url()]
 
     async def primary_heading(self) -> str | None:
         return "Member Inquiry"

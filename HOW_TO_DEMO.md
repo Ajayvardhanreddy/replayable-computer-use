@@ -67,8 +67,8 @@ uv run cua discover \
 The model hits a locked account and **asks for a human**. At the `operator ❯` prompt:
 ```
 take                                    # take the same live session; shows the blocker's controls
-submit Employee Verification Code=4729   # enter the code and submit (Enter); or `submit c1=4729`
-resume                                   # hand control back; the model finishes
+submit c2                               # the code field; the value is entered at a masked prompt, never typed inline
+resume                                  # hand control back; the model finishes
 ```
 You're running **headed**, so the live browser window is your visual context — you look at the real
 page and decide. The terminal presents the state structurally and scopes controls to the blocker

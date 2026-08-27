@@ -141,6 +141,8 @@ class OperatorController:
         pending = self._session.pending
         if pending is None:
             raise OperatorError("cannot take control without a pending intervention")
+        if self._session.lease.owner is ControlOwner.HUMAN:
+            raise OperatorError("control is already held by the operator")
         before = self._session.lease.owner
         epoch = self._session.lease.to_human()
         self._audit_transfer(before, ControlOwner.HUMAN, epoch, reason=pending.reason)
@@ -173,7 +175,8 @@ class OperatorController:
         route = self._session.route_label(await surface.current_route())
         # Audit first (even a scope-violating action is recorded), then enforce scope.
         self._audit_action(action_type, target, route, value_present)
-        if self._session.nav_policy.check(await surface.current_url()).effect is PolicyEffect.DENY:
+        scope = self._session.nav_policy.check_all(await surface.scope_urls())
+        if scope.effect is PolicyEffect.DENY:
             raise OperatorScopeError("human action left the allowed navigation scope")
 
     def release_to_automation(self) -> int:

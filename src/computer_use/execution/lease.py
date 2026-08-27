@@ -20,7 +20,10 @@ class ControlLease:
     """Mutable ownership token guarding a single live session.
 
     The lease starts owned by automation at epoch 0. ``to_human`` / ``to_automation``
-    are the only ways to change ownership, and each one advances the epoch.
+    are the only ways to change ownership, and each advances the epoch. Only a genuine
+    ownership change is legal: a same-owner transition (a double take or double release)
+    is rejected rather than silently re-advancing the epoch, since it is not a real
+    hand-off and would corrupt the epoch fencing the lease exists to provide.
     """
 
     def __init__(self) -> None:
@@ -37,12 +40,16 @@ class ControlLease:
 
     def to_human(self) -> int:
         """Transfer authority to the human operator; returns the new epoch."""
+        if self._owner is ControlOwner.HUMAN:
+            raise ControlLeaseError("control is already held by the human operator")
         self._owner = ControlOwner.HUMAN
         self._epoch += 1
         return self._epoch
 
     def to_automation(self) -> int:
         """Return authority to automation; returns the new epoch."""
+        if self._owner is ControlOwner.AUTOMATION:
+            raise ControlLeaseError("control is already held by automation")
         self._owner = ControlOwner.AUTOMATION
         self._epoch += 1
         return self._epoch

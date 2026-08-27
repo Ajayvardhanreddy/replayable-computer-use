@@ -1,6 +1,6 @@
 {
-  "intervention_id": "int_f2470638",
-  "run_id": "run_8ca70872",
+  "intervention_id": "int_0d718f28",
+  "run_id": "run_2d116167",
   "capability": "member.lookup_savings_balance",
   "version": 1,
   "step_id": null,
@@ -20,5 +20,5 @@
     ],
     "screenshot": null
   },
-  "ts": "2026-08-26T23:32:32.736759Z"
+  "ts": "2026-08-27T20:36:06.071286Z"
 }

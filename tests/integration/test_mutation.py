@@ -8,6 +8,8 @@ Capability B is a mutation-semantics fixture; genuine model discovery is proven 
 Capability A.
 """
 
+from urllib.parse import urlsplit
+
 import pytest
 
 from computer_use.execution import ControlLease, ReplaySession, replay
@@ -46,6 +48,29 @@ _SAFE_B = frozenset({"Search", "Open Sub-Account", "Member Inquiry"})
 _APPROVE = ConfirmationPolicy(approved=frozenset({"member.open_sub_account:v1:s4_create"}))
 # LegacyCore's member profile is an immediately-consistent, authoritative read source.
 _AUTHORITATIVE = AuthorityPolicy(authoritative_absence=True)
+
+
+@pytest.fixture
+def nav_policy(legacy_core_url: str) -> NavigationPolicy:
+    """Capability B navigation scope: the read routes plus the sub-account write route.
+
+    Overrides the shared conftest fixture so the write route the workspace iframe visits
+    is in scope for these tests, while Capability A's integration scope stays tight. This
+    mirrors the workstation's Capability B scope; frame-aware enforcement judges the iframe
+    URL, not just the top page, so the write route must be allowlisted here.
+    """
+    parts = urlsplit(legacy_core_url)
+    return NavigationPolicy(
+        allowed_origins=frozenset({f"{parts.scheme}://{parts.netloc}"}),
+        allowed_routes=frozenset(
+            {
+                "/",
+                "/workspace/inquiry",
+                "/workspace/member/:member_number",
+                "/workspace/member/:member_number/sub-account",
+            }
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)
