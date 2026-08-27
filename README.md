@@ -37,10 +37,12 @@ LegacyCore is the synthetic credit-union employee workstation the agent operates
 uv run legacy-core
 ```
 
-Then open http://localhost:8000. Deterministic runtime scenarios can be requested with a
-`scenario` query parameter, e.g. `http://localhost:8000/?scenario=slow` or
-`http://localhost:8000/?scenario=unexpected_dialog`. A member number with no record (e.g.
-`99999`) yields a "Member record not found" result.
+Then open http://localhost:8000. LegacyCore doubles as a deterministic eval environment: a
+`scenario` query parameter injects a reproducible world state (e.g. `?scenario=slow`,
+`?scenario=unexpected_dialog`, `?scenario=session_expired`, `?scenario=permission_denied`,
+`?scenario=not_found`), and each maps to a typed replay outcome. The full scenario → outcome
+matrix is in [`docs/eval-scenarios.md`](docs/eval-scenarios.md). Ordinary product behaviour stays
+data-driven — a member number with no record (e.g. `99999`) yields a "Member record not found".
 
 ## Configuration
 
@@ -85,13 +87,13 @@ uv run legacy-core                        # terminal 1: the target app
 
 # Replay meets an unexpected modal it cannot classify (deterministic, no model key):
 uv run cua handoff-demo --headed
-#   operator> take  ->  ack  ->  resume        (ends model_calls = 0, balance returned)
+#   operator ❯ take  ->  click c1  ->  resume   (c1 = the blocker's Acknowledge; model_calls = 0)
 
 # A live discovery model asks for a human on a flagged account (needs a model key):
 uv run cua discover --headed --scenario verification_required \
   --goal "Look up this member and return their savings balance" \
   --param member_number=12345
-#   operator> take  ->  submit Employee Verification Code=4729  ->  resume
+#   operator ❯ take  ->  submit c1  ->  resume   (enter the code at the masked prompt)
 ```
 
 See [`docs/demo-handoff.md`](docs/demo-handoff.md) for the full walkthrough with expected

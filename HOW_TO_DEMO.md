@@ -174,6 +174,35 @@ a blind retry, never a false success.
 
 ---
 
+## Demo 4 — Deterministic scenarios (the app as an eval environment)
+
+LegacyCore injects reproducible failure states with a `--scenario` switch; the model-free runtime
+(`model_calls: 0`) classifies each into a **typed** result. No model key needed.
+
+```bash
+# Runtime errors → typed failures that name the observed state:
+uv run cua replay evidence/capability/member_lookup.v1.json -p member_number=54321 --scenario session_expired
+#   → failure CHECKPOINT_FAILED, observed heading "Session Expired"
+
+uv run cua replay evidence/capability/member_lookup.v1.json -p member_number=54321 --scenario permission_denied
+#   → failure CHECKPOINT_FAILED, observed heading "Access Denied"
+
+# A legitimate domain answer, not a crash (even with a valid id):
+uv run cua replay evidence/capability/member_lookup.v1.json -p member_number=54321 --scenario not_found
+#   → business_outcome MEMBER_NOT_FOUND
+```
+
+Other scenarios used by the demos above: `slow`, `unexpected_dialog` (Demo 2),
+`verification_required` (discovery handoff), and the write family `commit_then_timeout`,
+`commit_ambiguous`, `commit_dropped`, `commit_unverifiable`, `verification_dialog` (Demo 3).
+
+**Shows:** the same generic runtime handles heterogeneous runtime errors — a business outcome, a
+typed failure with safe evidence, an escalation, or a same-session handoff — never a crash. The
+full **scenario → outcome matrix** (12 rows, each with its test/evidence) is in
+[`docs/eval-scenarios.md`](docs/eval-scenarios.md).
+
+---
+
 ## What each demo proves (one line each)
 
 | Demo | Proves |
@@ -181,6 +210,7 @@ a blind retry, never a false success.
 | 1 | discovery → saved capability → deterministic replay + business outcomes |
 | 2 | same-session human takeover |
 | 3 | safe consequential writes: dispatch-once, independent verification, escalate-or-recover |
+| 4 | deterministic eval scenarios: heterogeneous runtime errors → typed outcomes + safe evidence |
 
 That covers the whole submission: a goal, a genuine model run on a real UI, a saved capability,
 deterministic replay with inputs/outputs/errors, and a human able to take the live session.

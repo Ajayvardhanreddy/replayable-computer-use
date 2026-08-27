@@ -32,37 +32,50 @@ uv run cua handoff-demo --headed          # terminal 2
 ```
 
 A window opens: automation types the member number, clicks Search, reaches the profile —
-and a **"System Notice" modal blocks it**. Replay stops and prints an intervention. At the
-`operator>` prompt, type:
+and a **"System Notice" modal blocks it**. Replay stops and prints a deterministic
+**Expected-vs-Observed** intervention (no model prose). At the `operator ❯` prompt, type:
 
 ```
-status
-take
-ack
-resume
+take           # take control; it lists the blocker's controls (c1 Acknowledge) and shows the session id
+click c1       # click the blocker's Acknowledge (short alias: `ack`)
+resume         # reconcile and hand back; the run completes
 ```
 
-### Expected output
+### Expected output (rich panels; shown here as plain text)
 
 ```
-=== Intervention required ===
-  id:         int_bd23879b
-  capability: member.lookup_savings_balance v1
-  step:       step_3_extract
-  reason:     UNKNOWN_DIALOG
-  control:    automation (epoch 0)
-  route:      /
-  landmarks:  ['System Notice', 'Member Profile']
-commands: take (take control) | ack (acknowledge the notice) | resume (hand back to automation) | status | help | quit
-operator> owner=automation epoch=0
-operator> control -> HUMAN (epoch 1); automation is now blocked
-operator> acknowledged on the live session (human action recorded)
-operator> {"run_id":"run_02d0684e","model_calls":0,"status":"success","capability":"member.lookup_savings_balance","version":1,"outputs":{"savings_balance":"8421.31"}}
+╭──────────────── INTERVENTION REQUIRED ────────────────╮
+  Capability   member.lookup_savings_balance v1
+  Step         step_3_extract
+  Reason       UNKNOWN_DIALOG
+  Session      sess_83018d74
+  Control      AUTOMATION      Epoch  0
+  Last action  click Search
+  Expected     Member Profile · savings_balance
+  Observed     Member Profile · blocked by dialog "System Notice"
+  Dialog text  "Please acknowledge the account notice before continuing."
+  controls in blocker:   c1   link   Acknowledge
+  take · inspect · controls · status · help · quit
+╰────────────────────────────────────────────────────────╯
+[AUTOMATION · epoch 0] operator ❯ take
+  ● Control transferred   AUTOMATION → HUMAN   session sess_83018d74 preserved   epoch → 1
+  ╭ HUMAN CONTROL ╮ You now control the same live session. Automation is fenced.
+  blocked by dialog "System Notice" — its controls:   c1   link   Acknowledge
+[HUMAN · epoch 1] operator ❯ click c1
+  ✓ recorded: click "Acknowledge"   (epoch 1)
+  blocker cleared — now at "Member Profile". Type 'resume' to hand back.
+[HUMAN · epoch 1] operator ❯ resume
+  ◌ Reconciling current application state…
+  ✓ Control returned HUMAN → AUTOMATION (session sess_83018d74 preserved, epoch 2)
+  ✓ model_calls: 0
+  ╭ SUCCESS ╮  savings_balance  8421.31
 ```
 
 The Chromium window stays open so you can watch the same session change as each command
-runs. Every operator action goes through the audited control path — `ack` clicks Acknowledge
-on that exact session and records it — so the human's activity is captured, not just observed.
+runs. Every operator action goes through the audited control path — `click c1` clicks the
+dialog's Acknowledge on that exact session and records it — so the human's activity is
+captured, not just observed. The intervention presents **deterministic facts** (what the
+artifact expected vs what the live surface shows), never a model-written explanation.
 
 ### What this proves
 
@@ -70,6 +83,9 @@ on that exact session and records it — so the human's activity is captured, no
   on a blocking state the artifact does not model. Detection is structural (a visible
   `role=dialog aria-modal` element), not a match on the notice text.
 - `take` flips the lease to `HUMAN (epoch 1)` and the trusted kernel **fences automation off**.
+- The **same session id** (`sess_…`) is shown at the intervention and marked *preserved* across
+  both transfers (epoch 0 → 1 → 2) — the same-live-session requirement made visible, using our
+  own stable identifier, never a driver internal.
 - The human resolves it on the **same live session**; `resume` reconciles (the modal is gone
   and the "Member Profile" checkpoint still holds) and continues.
 - The run finishes `success`, `savings_balance: 8421.31`, **`model_calls: 0`** — the human
@@ -103,41 +119,44 @@ uv run cua discover --headed --scenario verification_required \
 
 The window shows the live model type the member number, click Search, and reach an
 **"Identity Verification Required"** screen — a verification state for which it was not given
-the required credential. It stops and prints an intervention. At the `operator>` prompt, type:
+the required credential. The model **asks for a human itself**, and the panel shows the
+model's own reason plus the trusted structural observation. At the `operator ❯` prompt, type:
 
 ```
-take
-submit Employee Verification Code=4729
-resume
+take           # take control; it lists the page controls (c2 is the code field) and shows the session id
+submit c2      # enter the code at a masked prompt (a sensitive field is never typed inline)
+resume         # hand back; the model re-observes the unblocked page and continues
 ```
 
-The window stays open so you watch the same session unblock; the operator drives it through
-the audited console commands, so the code entry is recorded (as a redacted value).
-
-### Expected output
+### Expected output (rich panels; shown here as plain text)
 
 ```
-=== Intervention required (discovery) ===
-  id:         int_a84e5d70
-  capability: member.lookup_savings_balance
-  reason:     HUMAN_REQUESTED
-  control:    automation (epoch 0)
-  landmarks:  ['Identity Verification Required']
-  controls:   ['link:Member Inquiry', 'textbox:Employee Verification Code']
-
-You now hold nothing yet. To resolve this on the SAME live session:
-  1) 'take'  — grab exclusive control
-  2) resolve it, either way:
-       • directly in the browser window (type the code, press Enter), or
-       • 'submit <field>=<value>' to do it through the audited console
-         e.g.  submit Employee Verification Code=4729
-  3) 'resume' — hand control back so the model continues
-commands: take | submit <field>=<value> | type <field>=<value> | click <name> | resume | status | help | quit
-operator> control -> HUMAN (epoch 1); automation is blocked
-operator> submitted 'Employee Verification Code' (value recorded as redacted)
-operator> control -> AUTOMATION; discovery will re-observe and continue
+╭─────────── INTERVENTION REQUIRED  ·  discovery ───────────╮
+  Capability   member.lookup_savings_balance v1
+  Step         —
+  Reason       HUMAN_REQUESTED
+  Session      sess_cb7b3ccb
+  Control      AUTOMATION      Epoch  0
+  Agent request:  <the model's own concise reason for escalating>
+  Observed     Identity Verification Required
+  take · inspect · controls · status · help · quit
+╰────────────────────────────────────────────────────────────╯
+[AUTOMATION · epoch 0] operator ❯ take
+  ● Control transferred   AUTOMATION → HUMAN   session sess_cb7b3ccb preserved   epoch → 1
+  current actionable controls:   c1 link Member Inquiry    c2 textbox Employee Verification Code
+[HUMAN · epoch 1] operator ❯ submit c2
+  Employee Verification Code: ••••          (no-echo prompt — the value never appears)
+  ✓ recorded: submit "Employee Verification Code"   (epoch 1 · value redacted)
+[HUMAN · epoch 1] operator ❯ resume
+  ● Control transferred   HUMAN → AUTOMATION   session sess_cb7b3ccb preserved   epoch → 2
+  discovery will re-observe and continue
 {"artifact": "evidence/discovery_handoff/member_lookup.v1.json", "model": "claude-sonnet-4-6", "model_calls": 6, "stop_reason": "GOAL_REACHED"}
 ```
+
+Because the code field is a **sensitive** field, its value is read from a no-echo prompt — it
+appears in neither the terminal transcript nor the evidence (audited as `<redacted>`). The panel
+shows the model's *own* `request_human` reason (clearly labelled as an agent request), never a
+generated paragraph; replay, by contrast, shows deterministic Expected-vs-Observed facts.
 
 ### Evidence trace (`evidence/discovery_handoff/trace.jsonl`)
 
@@ -198,13 +217,17 @@ The operator inputs can be piped for a scripted, headless reproduction (useful i
 regenerating evidence):
 
 ```bash
-printf 'status\ntake\nack\nresume\n' | uv run cua handoff-demo --headless
+printf 'take\nclick c1\nresume\n' | uv run cua handoff-demo --headless
 
-printf 'take\nsubmit Employee Verification Code=4729\nresume\n' | \
+printf 'take\nsubmit c2=4729\nresume\n' | \
   uv run cua discover --headless --scenario verification_required \
   --goal "Look up this member and return their savings balance" \
   -p member_number=12345 --out /tmp/d.json --evidence /tmp/d.jsonl
 ```
+
+Piping supplies the value inline (`submit c2=4729`) because a non-interactive stream has no
+terminal to leak to; interactively the same sensitive field is refused inline and read from a
+masked prompt instead. Either way the value is audited as `<redacted>`.
 
 ---
 
