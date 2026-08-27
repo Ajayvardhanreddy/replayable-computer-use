@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from computer_use.execution import (
+    ApprovalGrant,
+    ApprovalRequest,
+    ApprovalRequired,
     ControlLease,
     InterventionSignal,
     KernelRejection,
@@ -23,6 +26,7 @@ from computer_use.handoff import OperatorController
 from computer_use.model import PolicyEffect, ProposedActionType, TargetDescriptor
 from computer_use.observability import (
     EvidenceStore,
+    consequential_approval_event,
     discovery_finished_event,
     discovery_started_event,
     intervention_raised_event,
@@ -44,8 +48,15 @@ from .model import (
 from .trace import DiscoveryTrace, TraceStep
 
 # A handler drives the human takeover on the same live session and returns True when
-# the human resolved the block and discovery should continue, False to stop.
-HumanRequestHandler = Callable[[OperatorController], Awaitable[bool]]
+# the human resolved the block and discovery should continue, False to stop. It receives the
+# model's own concise escalation reason (the `request_human` reason, not chain-of-thought) so
+# the operator surface can show why the agent asked for a human.
+HumanRequestHandler = Callable[[OperatorController, str | None], Awaitable[bool]]
+
+# A handler obtains a human decision for a consequential action. It returns a one-time
+# ApprovalGrant to authorize this exact operation, or None to refuse (the model is then
+# steered to escalate; it can never authorize itself).
+ConsequentialApprovalHandler = Callable[[ApprovalRequest], Awaitable[ApprovalGrant | None]]
 
 _STUCK_LIMIT = 5
 _REPEAT_LIMIT = 3
@@ -148,6 +159,7 @@ async def discover(
     evidence: EvidenceStore | None = None,
     lease: ControlLease | None = None,
     on_human_request: HumanRequestHandler | None = None,
+    on_consequential_approval: ConsequentialApprovalHandler | None = None,
 ) -> DiscoveryOutcome:
     run_id = f"run_{uuid4().hex[:8]}"
     # Same-session human handoff for a genuinely stuck model: available only when a
@@ -246,7 +258,7 @@ async def discover(
             if evidence is not None:
                 evidence.write(intervention_raised_event(run_id, "HUMAN_REQUESTED", model_calls))
             try:
-                resolved = await on_human_request(operator)
+                resolved = await on_human_request(operator, proposal.reason)
             finally:
                 handoff.pending = None
             if not resolved:
@@ -283,10 +295,46 @@ async def discover(
         heading_before: str | None = None
         if proposal.action is ProposedActionType.CLICK:
             heading_before = await surface.primary_heading()
+        epoch = lease.epoch if lease is not None else None
         try:
-            execution = await kernel.execute(
-                proposal, by_id, epoch=lease.epoch if lease is not None else None
+            execution = await kernel.execute(proposal, by_id, epoch=epoch)
+        except ApprovalRequired as required:
+            # A consequential action: authority to commit comes from a human, never
+            # the model. Obtain a one-time grant, then re-invoke the kernel, which
+            # re-resolves and re-fingerprints the operation before dispatching once.
+            grant = (
+                await on_consequential_approval(required.request)
+                if on_consequential_approval is not None
+                else None
             )
+            decision = "approved" if grant is not None else "denied"
+            if evidence is not None:
+                evidence.write(
+                    consequential_approval_event(run_id, decision, required.request, model_calls)
+                )
+            if grant is None:
+                last_error = (
+                    "that action makes a consequential change and was not authorized. You "
+                    "cannot authorize it yourself; do not try other controls — propose "
+                    "request_human"
+                )
+                consecutive_errors += 1
+                if consecutive_errors >= _STUCK_LIMIT:
+                    stop_reason = "STUCK"
+                    break
+                continue
+            try:
+                execution = await kernel.execute(proposal, by_id, epoch=epoch, approval=grant)
+            except KernelRejection as rejection:
+                # e.g. APPROVAL_STALE: the operation moved between request and grant.
+                last_error = _rejection_message(rejection)
+                consecutive_errors += 1
+                if evidence is not None:
+                    evidence.write(step_rejected_event(run_id, rejection.code.value))
+                if consecutive_errors >= _STUCK_LIMIT:
+                    stop_reason = "STUCK"
+                    break
+                continue
         except KernelRejection as rejection:
             last_error = _rejection_message(rejection)
             consecutive_errors += 1
@@ -318,6 +366,7 @@ async def discover(
                 risk=execution.risk,
                 value=execution.value,
                 output=proposal.output,
+                route=model_obs.route,
                 observed_landmark=landmark,
                 heading_before=heading_before,
                 expected_effect=proposal.expected_effect,

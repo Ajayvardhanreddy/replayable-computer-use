@@ -29,6 +29,7 @@ from playwright.async_api import (
 from computer_use.model import TargetDescriptor
 
 from .base import (
+    BlockerObservation,
     Candidate,
     Observation,
     StructuralSnapshot,
@@ -126,6 +127,48 @@ _BLOCKING_DIALOG_JS = """
     const rect = d.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   });
+}
+"""
+
+# Structural description of the first visible modal dialog: its accessible name, the notice
+# body text, and the interactable controls it contains. Structural only (no pixels), scoped to
+# the dialog subtree so an intervention focuses on what is blocking rather than the whole page.
+_BLOCKER_JS = """
+() => {
+  const dialogs = [...document.querySelectorAll('[role=dialog][aria-modal=true]')];
+  const vis = dialogs.find((d) => {
+    if (d.hasAttribute('hidden')) return false;
+    const s = window.getComputedStyle(d);
+    if (s.display === 'none' || s.visibility === 'hidden') return false;
+    const r = d.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  });
+  if (!vis) return null;
+  let name = (vis.getAttribute('aria-label') || '').trim();
+  if (!name) {
+    const lb = vis.getAttribute('aria-labelledby');
+    const t = lb ? document.getElementById(lb) : null;
+    name = t ? (t.innerText || '').trim() : '';
+  }
+  if (!name) {
+    const h = vis.querySelector('h1,h2,h3');
+    name = h ? (h.innerText || '').trim() : '';
+  }
+  const p = vis.querySelector('p');
+  const text = ((p ? p.innerText : vis.innerText) || '').trim();
+  const controls = [];
+  vis.querySelectorAll('input[type=text], input:not([type])').forEach((el) => {
+    const l = (el.labels && el.labels.length) ? (el.labels[0].innerText || '').trim()
+      : (el.getAttribute('aria-label') || '').trim();
+    controls.push({ role: 'textbox', name: l });
+  });
+  vis.querySelectorAll('button').forEach((el) => {
+    controls.push({ role: 'button', name: (el.innerText || '').trim() });
+  });
+  vis.querySelectorAll('a[href]').forEach((el) => {
+    controls.push({ role: 'link', name: (el.innerText || '').trim() });
+  });
+  return { name, text, controls };
 }
 """
 
@@ -320,9 +363,17 @@ class PlaywrightSurface:
             raise TargetAmbiguousError("target matched in multiple frames")
         return matches[0]
 
-    async def click(self, target: TargetDescriptor) -> None:
+    async def click(self, target: TargetDescriptor, *, timeout_ms: int | None = None) -> None:
         locator = await self._unique_locator(target)
         await self._act(locator.click())
+        # For a consequential commit, wait for the resulting completion within a bounded
+        # budget: if the server withholds normal completion the wait raises, converting a
+        # hang into an uncertain dispatch (the effect may already have committed).
+        if timeout_ms is not None:
+            try:
+                await self._pg().wait_for_load_state("networkidle", timeout=timeout_ms)
+            except PlaywrightError as error:
+                raise _translate(error) from error
 
     async def type_text(
         self, target: TargetDescriptor, text: str, *, submit: bool = False
@@ -401,6 +452,26 @@ class PlaywrightSurface:
             if cast(bool, await self._safe_eval(frame, _BLOCKING_DIALOG_JS)):
                 return True
         return False
+
+    async def observe_blocker(self) -> BlockerObservation | None:
+        """Structural description of the current blocking modal, or None. Concrete-surface
+        only (not part of the Surface protocol): the operator console uses it to scope an
+        intervention to the blocker's own controls and text, never the whole page."""
+        for frame in self._pg().frames:
+            raw = cast("dict[str, Any] | None", await self._safe_eval(frame, _BLOCKER_JS))
+            if not raw:
+                continue
+            controls = [
+                Candidate(id=f"b{i}", role=str(item["role"]), name=(item.get("name") or None))
+                for i, item in enumerate(raw.get("controls", []), start=1)
+            ]
+            # Minimize the notice text: collapse whitespace and cap length (structural aid,
+            # not a place to surface long or sensitive copy).
+            text = " ".join((raw.get("text") or "").split())[:200] or None
+            return BlockerObservation(
+                role="dialog", name=(raw.get("name") or None), text=text, controls=controls
+            )
+        return None
 
     async def current_route(self) -> str:
         return urlparse(self._pg().url).path

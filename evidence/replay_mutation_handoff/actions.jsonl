@@ -1,0 +1,2 @@
+{"event":"control_transferred","run_id":"run_25d1931f","ts":"2026-08-26T18:12:43.588336Z","step_id":null,"attributes":{"from_owner":"automation","to_owner":"human","epoch":1,"operator_id":"local-operator","reason":"MUTATION_AMBIGUOUS"}}
+{"event":"control_transferred","run_id":"run_25d1931f","ts":"2026-08-26T18:12:50.121661Z","step_id":null,"attributes":{"from_owner":"human","to_owner":"automation","epoch":2,"operator_id":"local-operator","reason":null}}

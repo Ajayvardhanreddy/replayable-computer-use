@@ -98,7 +98,7 @@ balance is masked in the persisted file while the live result returns the real v
 uv run cua discover --headed --scenario verification_required \
   --goal "Look up this member and return their savings balance" \
   -p member_number=12345 \
-  --out /tmp/discovered.json --evidence /tmp/discovery_trace.jsonl
+  --out evidence/discovery_handoff/member_lookup.v1.json --evidence evidence/discovery_handoff/trace.jsonl
 ```
 
 The window shows the live model type the member number, click Search, and reach an
@@ -136,10 +136,10 @@ commands: take | submit <field>=<value> | type <field>=<value> | click <name> | 
 operator> control -> HUMAN (epoch 1); automation is blocked
 operator> submitted 'Employee Verification Code' (value recorded as redacted)
 operator> control -> AUTOMATION; discovery will re-observe and continue
-{"artifact": "/tmp/discovered.json", "model": "claude-sonnet-4-6", "model_calls": 6, "stop_reason": "GOAL_REACHED"}
+{"artifact": "evidence/discovery_handoff/member_lookup.v1.json", "model": "claude-sonnet-4-6", "model_calls": 6, "stop_reason": "GOAL_REACHED"}
 ```
 
-### Evidence trace (`/tmp/discovery_trace.jsonl`)
+### Evidence trace (`evidence/discovery_handoff/trace.jsonl`)
 
 ```
 discovery_started   {provider: anthropic, model_id: claude-sonnet-4-6, goal_present: True}

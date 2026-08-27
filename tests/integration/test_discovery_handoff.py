@@ -141,7 +141,7 @@ async def test_discovery_side_handoff_completes(
     model = _StubModel()
     took_over: dict[str, int] = {}
 
-    async def human_handler(operator: OperatorController) -> bool:
+    async def human_handler(operator: OperatorController, reason: str | None = None) -> bool:
         # An authorized employee takes the SAME live session, enters the code, continues.
         took_over["obs_before"] = len(model.observations)
         operator.take_control()

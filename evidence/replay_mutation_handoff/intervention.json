@@ -1,0 +1,25 @@
+{
+  "intervention_id": "int_b7a1d43b",
+  "run_id": "run_25d1931f",
+  "capability": "member.open_sub_account",
+  "version": 1,
+  "step_id": "step_4_click",
+  "reason": "MUTATION_AMBIGUOUS",
+  "control_owner": "automation",
+  "control_epoch": 0,
+  "route": "/",
+  "evidence": {
+    "policy": "structural_only",
+    "route": "/",
+    "frames": [
+      "main",
+      "lc-workspace"
+    ],
+    "landmarks": [
+      "System Notice",
+      "Member Profile"
+    ],
+    "screenshot": null
+  },
+  "ts": "2026-08-26T18:12:33.556658Z"
+}

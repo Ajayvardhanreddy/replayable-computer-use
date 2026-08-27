@@ -47,7 +47,7 @@ class FakeSurface:
     async def count(self, target: TargetDescriptor) -> int:
         return self._count
 
-    async def click(self, target: TargetDescriptor) -> None:
+    async def click(self, target: TargetDescriptor, *, timeout_ms: int | None = None) -> None:
         self.clicks.append(target)
 
     async def type_text(self, target: TargetDescriptor, text: str) -> None:

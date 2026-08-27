@@ -10,6 +10,8 @@ transition declared to produce them. The output is a validated Capability contra
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from computer_use.model import (
@@ -21,9 +23,11 @@ from computer_use.model import (
     ExtractAction,
     Heading,
     InputSpec,
+    MutationVerification,
     Outcome,
     OutputSpec,
     ProposedActionType,
+    RiskClass,
     Step,
     TargetDescriptor,
     TypeAction,
@@ -105,6 +109,153 @@ def _synthesized_postcondition(trace_step: TraceStep) -> Condition | None:
     return None
 
 
+@dataclass(frozen=True)
+class VerificationProvenance:
+    """Which discovery steps became a write's embedded verification, so a reviewer can
+    see the model discovered the re-derivation rather than the compiler inventing it.
+
+    Indices are 1-based discovery step positions, matching the ``step_executed`` events
+    in the discovery trace evidence.
+    """
+
+    write_step_index: int
+    navigate_step_indices: list[int]
+    extract_step_index: int | None
+
+
+def verification_provenance(
+    trace: DiscoveryTrace, spec: GoalSpec
+) -> VerificationProvenance | None:
+    """The trace-step provenance of the compiled verification, or None for a read-only
+    capability. Mirrors ``_build_verification`` so the mapping is exact, not inferred."""
+    write_index = _consequential_index(trace)
+    if write_index is None:
+        return None
+    post = trace.steps[write_index + 1 :]
+    terminals = [
+        i
+        for i, ts in enumerate(post)
+        if ts.action is ProposedActionType.EXTRACT and ts.output == spec.success_output
+    ]
+    if len(terminals) != 1:
+        return None
+    terminal = terminals[0]
+    return VerificationProvenance(
+        write_step_index=write_index + 1,
+        navigate_step_indices=[write_index + 2 + offset for offset in range(terminal)],
+        extract_step_index=write_index + 2 + terminal,
+    )
+
+
+def _artifact_step(trace_step: TraceStep, step_id: str) -> Step:
+    return Step(
+        id=step_id,
+        action=_artifact_action(trace_step),
+        target=trace_step.target,
+        risk=trace_step.risk,
+        postcondition=_synthesized_postcondition(trace_step),
+        output=trace_step.output,
+    )
+
+
+def _consequential_index(trace: DiscoveryTrace) -> int | None:
+    """The single consequential write, or None for a read-only capability.
+
+    Fail closed on more than one: this capability class supports exactly one mutation,
+    never a multi-write workflow. Generic — keyed on software-derived risk, not labels.
+    """
+    indices = [i for i, s in enumerate(trace.steps) if s.risk is not RiskClass.READ_ONLY]
+    if not indices:
+        return None
+    if len(indices) > 1:
+        raise CapabilityValidationError(
+            f"exactly one consequential write is supported; the trace has {len(indices)}"
+        )
+    return indices[0]
+
+
+def _effect_condition(target: TargetDescriptor | None) -> Condition:
+    """The effect matcher derived from the model's own verification-extract target.
+
+    The discovered target *is* the effect identity; the compiler captures it, never a
+    hard-coded label. A relational cell is proven by the presence of its row identity.
+    """
+    if target is None:
+        raise CapabilityValidationError("verification extract has no target to derive an effect")
+    if target.table_cell is not None:
+        return Condition(text_present=target.table_cell.row_contains)
+    if target.name:
+        return Condition(text_present=target.name)
+    if target.text:
+        return Condition(text_present=target.text)
+    raise CapabilityValidationError("verification extract target has no stable effect identity")
+
+
+def _page_condition(navigate: list[TraceStep], terminal: TraceStep) -> Condition:
+    """Identify the effect view so a baseline can be evaluated on it (never on the
+    commit form). Prefer a discovered heading landmark; fall back to the view's route."""
+    for trace_step in reversed(navigate):
+        if trace_step.observed_landmark:
+            return Condition(heading=Heading(role="heading", name=trace_step.observed_landmark))
+    if terminal.route:
+        return Condition(route_pattern=terminal.route)
+    raise CapabilityValidationError("verification view could not be identified from the trace")
+
+
+def _build_verification(
+    trace: DiscoveryTrace, spec: GoalSpec, write_index: int
+) -> MutationVerification:
+    """Compile the post-write read-only sub-trace into an embedded verification recipe.
+
+    Generic and fail-closed: the segment after the single consequential write must be
+    wholly read-only and culminate in exactly one extract of the declared success
+    output — the independent confirmation the model discovered. Zero or several such
+    extracts is ambiguous and stops compilation.
+    """
+    post = trace.steps[write_index + 1 :]
+    if not post:
+        raise CapabilityValidationError(
+            "a consequential write must be followed by an independent verification"
+        )
+    for trace_step in post:
+        if trace_step.risk is not RiskClass.READ_ONLY:
+            raise CapabilityValidationError("every verification step must be read-only")
+    terminals = [
+        i
+        for i, trace_step in enumerate(post)
+        if trace_step.action is ProposedActionType.EXTRACT
+        and trace_step.output == spec.success_output
+    ]
+    if len(terminals) != 1:
+        raise CapabilityValidationError(
+            f"verification must culminate in exactly one extract of "
+            f"{spec.success_output!r}; the trace has {len(terminals)}"
+        )
+    terminal_index = terminals[0]
+    navigate_traces = post[:terminal_index]
+    terminal_trace = post[terminal_index]
+    return MutationVerification(
+        navigate=[
+            _artifact_step(ts, f"verify_nav_{i + 1}_{ts.action.value}")
+            for i, ts in enumerate(navigate_traces)
+        ],
+        page=_page_condition(navigate_traces, terminal_trace),
+        effect_present=_effect_condition(terminal_trace.target),
+        extract=_artifact_step(terminal_trace, "verify_extract"),
+    )
+
+
+def _baseline_reachable(pre_write: list[TraceStep], page: Condition) -> bool:
+    """The write's effect view must be reached on the normal path before the write, so a
+    trusted pre-dispatch baseline (effect-absent) can be evaluated there. Without it, a
+    present effect after the write is unattributable to this write."""
+    if page.heading is not None:
+        return any(step.observed_landmark == page.heading.name for step in pre_write)
+    if page.route_pattern is not None:
+        return any(step.route == page.route_pattern for step in pre_write)
+    return False
+
+
 def _resolve_outcome_bindings(
     trace: DiscoveryTrace, bindings: list[OutcomeBinding]
 ) -> dict[int, list[Outcome]]:
@@ -127,8 +278,31 @@ def _resolve_outcome_bindings(
 
 def compile_capability(trace: DiscoveryTrace, spec: GoalSpec, version: int = 1) -> Capability:
     outcomes_by_index = _resolve_outcome_bindings(trace, spec.business_outcomes)
+    # A consequential write's independent verification is the read-only sub-trace that
+    # follows it. It is compiled into an embedded recipe on the write step, and the
+    # post-write steps are lifted out of the top-level sequence (one canonical copy,
+    # no duplication). A read-only capability has no write and compiles flat as before.
+    write_index = _consequential_index(trace)
+    verification = (
+        _build_verification(trace, spec, write_index) if write_index is not None else None
+    )
+    # A consequential write's effect is only attributable if a baseline (effect-absent) can be
+    # established before it — which requires the effect view to be reached on the normal path
+    # before the write. Enforce that at compile time rather than relying on the trace
+    # incidentally visiting it; otherwise a good commit would replay as MUTATION_AMBIGUOUS.
+    if (
+        verification is not None
+        and write_index is not None
+        and not _baseline_reachable(trace.steps[:write_index], verification.page)
+    ):
+        raise CapabilityValidationError(
+            "the write's effect view is never reached before the write, so a pre-dispatch "
+            "baseline cannot be established and a later present effect would be unattributable"
+        )
+    top_level = write_index + 1 if write_index is not None else len(trace.steps)
     steps: list[Step] = []
-    for index, trace_step in enumerate(trace.steps):
+    for index in range(top_level):
+        trace_step = trace.steps[index]
         steps.append(
             Step(
                 id=f"step_{index + 1}_{trace_step.action.value}",
@@ -138,6 +312,7 @@ def compile_capability(trace: DiscoveryTrace, spec: GoalSpec, version: int = 1) 
                 postcondition=_synthesized_postcondition(trace_step),
                 outcomes=outcomes_by_index.get(index, []),
                 output=trace_step.output,
+                verification=verification if index == write_index else None,
             )
         )
     # Capability construction enforces the artifact-alone static invariants

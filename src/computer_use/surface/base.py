@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from computer_use.model import TargetDescriptor
 
@@ -27,6 +27,22 @@ class Candidate(BaseModel):
     row: str | None = None
     column: str | None = None
     filled: bool | None = None
+
+
+class BlockerObservation(BaseModel):
+    """A structural description of a blocking region (e.g. a modal dialog) currently on the
+    surface: its role, accessible name, minimized visible text, and the controls it contains.
+
+    This is structural only — no pixels — so it is safe to show an authorized operator and to
+    reason about deterministically. It scopes an intervention to what is actually blocking the
+    flow, rather than the whole background page.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    role: str
+    name: str | None = None
+    text: str | None = None
+    controls: list[Candidate] = Field(default_factory=list)
 
 
 class Observation(BaseModel):
@@ -75,7 +91,7 @@ class Surface(Protocol):
     async def goto(self, url: str) -> None: ...
     async def observe(self) -> Observation: ...
     async def count(self, target: TargetDescriptor) -> int: ...
-    async def click(self, target: TargetDescriptor) -> None: ...
+    async def click(self, target: TargetDescriptor, *, timeout_ms: int | None = None) -> None: ...
     async def type_text(
         self, target: TargetDescriptor, text: str, *, submit: bool = False
     ) -> None: ...

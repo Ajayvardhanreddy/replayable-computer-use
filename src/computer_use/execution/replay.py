@@ -9,7 +9,12 @@ same-session handoff path drives the session directly.
 from __future__ import annotations
 
 from computer_use.model import Capability, RunResult
-from computer_use.safety import NavigationPolicy, SecretProvider
+from computer_use.safety import (
+    AuthorityPolicy,
+    ConfirmationPolicy,
+    NavigationPolicy,
+    SecretProvider,
+)
 from computer_use.surface import Surface
 
 from .session import _RESOLVE_TIMEOUT_MS, ReplaySession
@@ -25,6 +30,9 @@ async def replay(
     surface: Surface | None = None,
     resolve_timeout_ms: int = _RESOLVE_TIMEOUT_MS,
     secrets: SecretProvider | None = None,
+    confirmation: ConfirmationPolicy | None = None,
+    commit_timeout_ms: int | None = None,
+    authority: AuthorityPolicy | None = None,
 ) -> RunResult:
     session = ReplaySession(
         capability,
@@ -35,6 +43,9 @@ async def replay(
         surface=surface,
         resolve_timeout_ms=resolve_timeout_ms,
         secrets=secrets,
+        confirmation=confirmation,
+        commit_timeout_ms=commit_timeout_ms,
+        authority=authority,
     )
     try:
         return await session.run_to_completion()

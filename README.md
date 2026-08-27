@@ -3,11 +3,14 @@
 LLM-discovered, typed computer-use capabilities that replay deterministically against legacy
 banking UIs, with a software-owned trust boundary and safety guardrails.
 
-The discovery → capability → replay vertical slice, the safety/redaction boundary, and
-same-session human-in-the-loop takeover are implemented and tested. The escalation and
-control-transfer design is written up in [`docs/handoff-design.md`](docs/handoff-design.md);
-runnable handoff demos with expected output are in
-[`docs/demo-handoff.md`](docs/demo-handoff.md).
+The discovery → capability → replay vertical slice, the safety/redaction boundary, the
+consequential-write (mutation) semantics, and same-session human-in-the-loop takeover are
+implemented and tested. The design write-up — architecture, artifact schema, determinism and
+error handling, heterogeneity and multi-tenant reuse, escalation and handoff, safety, and cuts —
+is in [`REPORT.md`](REPORT.md). Deeper design notes are in
+[`docs/handoff-design.md`](docs/handoff-design.md) and
+[`docs/mutation-design.md`](docs/mutation-design.md); runnable demos with expected output are in
+[`HOW_TO_DEMO.md`](HOW_TO_DEMO.md) and [`docs/demo-handoff.md`](docs/demo-handoff.md).
 
 ## Requirements
 
@@ -56,7 +59,7 @@ Discovery runs a genuine LLM against the live app and needs a model key; replay 
 ```bash
 uv run legacy-core                       # terminal 1: the target app
 
-# genuine discovery -> writes artifacts/member_lookup.v1.json
+# genuine discovery -> writes evidence/capability/member_lookup.v1.json
 export ANTHROPIC_API_KEY=...
 uv run cua discover \
   --goal "Look up this member and return their savings balance" \
@@ -64,8 +67,8 @@ uv run cua discover \
 
 # deterministic replay with a different input, no model in the loop (model_calls = 0)
 unset ANTHROPIC_API_KEY
-uv run cua replay artifacts/member_lookup.v1.json --param member_number=54321
-uv run cua replay artifacts/member_lookup.v1.json --param member_number=99999
+uv run cua replay evidence/capability/member_lookup.v1.json --param member_number=54321
+uv run cua replay evidence/capability/member_lookup.v1.json --param member_number=99999
 ```
 
 Without a model key you can still replay the committed artifact at

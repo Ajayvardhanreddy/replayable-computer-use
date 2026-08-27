@@ -6,7 +6,7 @@
   <div class="lc-modal">
     <h2 id="lc-modal-h">System Notice</h2>
     <p>Please acknowledge the account notice before continuing.</p>
-    <a href="/workspace/member/{{ member.member_number }}?scenario=normal" class="lc-ack-link">Acknowledge</a>
+    <a href="{{ ack_href }}" class="lc-ack-link">Acknowledge</a>
   </div>
 </div>
 {% endif %}
@@ -53,9 +53,24 @@
   </table>
 
   <div class="lc-actions">
-    <button type="button" class="x-b1">Open</button>
+    <a href="/workspace/member/{{ member.member_number }}/sub-account{{ scenario_suffix }}" class="x-b1 lc-linkbtn">Open Sub-Account</a>
     <a href="#" class="x-b1 lc-linkbtn">History</a>
     <button type="button" class="x-b1">Transfer</button>
   </div>
+
+  {% if sub_accounts %}
+  <table class="lc-acct x-af83">
+    <caption class="lc-lbl">Sub-accounts</caption>
+    <thead>
+      <tr>
+        <th scope="col">Type / Description</th>
+        <th scope="col">Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for sa in sub_accounts %}<tr><td>{{ sa }}</td><td>OPEN</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
 </section>
 {% endblock %}
