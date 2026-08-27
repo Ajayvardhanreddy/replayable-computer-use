@@ -7,26 +7,80 @@ closed or reconstructed), after which automation reconciles and completes with t
 correct balance and zero model calls.
 """
 
-from pathlib import Path
-
 from computer_use.execution import ReplaySession
 from computer_use.handoff import ClickControl, InterventionReason, OperatorController
 from computer_use.model import (
     Capability,
+    CapabilityTarget,
+    ClickAction,
+    Condition,
     ControlOwner,
     Escalated,
+    ExtractAction,
+    Heading,
+    InputSpec,
+    OutputSpec,
+    ParameterRef,
+    ParamType,
+    RiskClass,
+    Sensitivity,
+    Step,
     Success,
+    TableCellTarget,
     TargetDescriptor,
+    TypeAction,
 )
 from computer_use.safety import NavigationPolicy
 from computer_use.surface import PlaywrightSurface
 
 _SAFE_CLICKS = frozenset({"Search"})
-_ARTIFACT = Path(__file__).parents[2] / "artifacts" / "member_lookup.v1.json"
 
 
 def _capability() -> Capability:
-    return Capability.model_validate_json(_ARTIFACT.read_text(encoding="utf-8"))
+    """The member-lookup capability, built inline so the test is self-contained and does
+    not depend on a generated artifact file. Mirrors what discovery compiles for Cap A:
+    type the member, search, extract the Share Savings current balance."""
+    return Capability(
+        id="member.lookup_savings_balance",
+        version=1,
+        target=CapabilityTarget(vendor="legacy_core", application_family="core_banking"),
+        inputs={"member_number": InputSpec(type=ParamType.STRING, sensitivity=Sensitivity.PII)},
+        outputs={
+            "savings_balance": OutputSpec(
+                type=ParamType.DECIMAL, sensitivity=Sensitivity.FINANCIAL, currency="USD"
+            )
+        },
+        steps=[
+            Step(
+                id="s1_type",
+                action=TypeAction(value=ParameterRef(name="member_number")),
+                target=TargetDescriptor(
+                    role="textbox", name="Member Number", frame="lc-workspace"
+                ),
+                risk=RiskClass.READ_ONLY,
+            ),
+            Step(
+                id="s2_search",
+                action=ClickAction(),
+                target=TargetDescriptor(role="button", name="Search", frame="lc-workspace"),
+                risk=RiskClass.READ_ONLY,
+                postcondition=Condition(heading=Heading(role="heading", name="Member Profile")),
+            ),
+            Step(
+                id="s3_extract",
+                action=ExtractAction(),
+                target=TargetDescriptor(
+                    table_cell=TableCellTarget(
+                        row_contains="Share Savings", column_header="Current Balance"
+                    ),
+                    frame="lc-workspace",
+                ),
+                risk=RiskClass.READ_ONLY,
+                output="savings_balance",
+            ),
+        ],
+        success_checkpoint=Condition(output_present="savings_balance"),
+    )
 
 
 async def test_same_session_handoff_completes(

@@ -54,3 +54,20 @@ class ControlOwner(StrEnum):
 
     AUTOMATION = "automation"
     HUMAN = "human"
+
+
+class EffectState(StrEnum):
+    """Certainty about whether a consequential mutation reached the application.
+
+    A consequential write is dispatched exactly once. The moment the dispatch call
+    is invoked, the runtime can no longer assume the effect did not happen; from
+    there only observable read-back moves the state forward. This is the smallest
+    representation needed to decide whether retry is safe (only before dispatch).
+    """
+
+    NOT_DISPATCHED = "not_dispatched"
+    DISPATCHING = "dispatching"
+    DISPATCHED = "dispatched"
+    COMMITTED = "committed"
+    NOT_COMMITTED = "not_committed"
+    AMBIGUOUS = "ambiguous"

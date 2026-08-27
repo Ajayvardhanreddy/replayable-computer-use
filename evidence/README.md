@@ -1,83 +1,82 @@
 # Evidence
 
-A genuine end-to-end run of the computer-use vertical slice against the local
-LegacyCore workstation: LLM discovery → compiled capability → deterministic replay.
+Genuine end-to-end runs against the local LegacyCore workstation: **LLM discovery →
+compiled capability → deterministic replay (`model_calls = 0`)**, with safe/redacted
+evidence, consequential-write safety, and same-session human handoff. Every discovery
+trace is a real Anthropic run (`claude-sonnet-4-6`). Exact commands to reproduce this whole
+set are in [`../HOW_TO_DEMO.md`](../HOW_TO_DEMO.md).
 
-## Files
+**Safety, verified across the whole set:** no raw member id, financial value, or verification
+code appears in any file here; financial outputs are masked (`savings_balance = <financial>`);
+routes are recorded as structural patterns, not concrete PII paths; screenshots are
+structural-only; and no runtime scenario identifier reaches any model-facing trace.
 
-- `discovery/trace.jsonl` — the **genuine LLM discovery run** (provider `anthropic`,
-  model `claude-sonnet-4-6`). Structured events only: no secrets, no raw member value
-  (recorded symbolically as `<param:member_number>`), no financial values, and no raw
-  natural-language goal (recorded as `goal_present`).
-- `capability/member_lookup.v1.json` — the typed **capability** compiled from that run
-  (`ParameterRef` provenance, a semantic `table_cell` target for the balance, an authored
-  `MEMBER_NOT_FOUND` business outcome; no literal invocation values).
-- `replay_success/result.json` — deterministic replay for a **different** member (`54321`):
-  `success`, `model_calls = 0`. The financial output is **masked in persisted evidence**
-  (`savings_balance = <financial>`); the caller receives the raw typed value from the
-  returned result on stdout.
-- `replay_business_outcome/result.json` — replay for an **unknown** member (`99999`):
-  `business_outcome` `MEMBER_NOT_FOUND` — a legitimate domain answer, not a crash — with
-  `model_calls = 0`.
-- `discovery_handoff/` — a **genuine discovery-side handoff** (`anthropic`, `claude-sonnet-4-6`):
-  the live model looks up a flagged account, finds it needs an employee verification credential
-  it was never given, and — from its normal action schema — proposes `request_human`. A human
-  enters the code on the *same* live session and the model resumes to `GOAL_REACHED`.
-  - `trace.jsonl` — the model's run: `intervention_raised` (`HUMAN_REQUESTED`, with the
-    model-call index), the `automation → human → automation` transfers with a monotonic epoch,
-    and the human action with the code redacted (`<redacted>`). No goal text, member id,
-    balance, or code — the escalation itself was the real model's decision (`model_calls > 0`),
-    while production replay of a compiled capability stays `model_calls = 0`.
-  - `intervention.json` — the sanitized `InterventionRequest` (reason `HUMAN_REQUESTED`,
-    structural landmark `Identity Verification Required`, no screenshot, no PII).
+## Read capability — `member.lookup_savings_balance`
 
-  This scenario intentionally exercises the general **same-session takeover** path (exclusive
-  control, audited human action, reconciliation). A known verification-code requirement is a
-  natural structured `INPUT_REQUIRED` intervention and in production would normally be handled
-  as a typed request without transferring browser control; live takeover is reserved for states
-  that cannot be represented safely as a typed request. See `docs/handoff-design.md`.
-- `replay_handoff/` — a **same-session human handoff**: replay meets an unexpected modal it
-  cannot classify, pauses, and a human resolves it on the *same* live session before
-  automation resumes.
-  - `intervention.json` — the sanitized `InterventionRequest`: reason `UNKNOWN_DIALOG`, the
-    pending step, current ownership, a structural route label, and structural landmarks
-    (`System Notice`, `Member Profile`) — no member id, no financial value, no screenshot.
-  - `actions.jsonl` — the audited control transfers and the human action. Ownership moves
-    `automation → human → automation` with a **monotonic control epoch** (0 → 1 → 2); the
-    human action records a structural target fingerprint (`link:Acknowledge`) with any typed
-    value redacted — never the raw value.
-  - `result.json` — the final `success` after handback with `model_calls = 0`; the financial
-    output is masked (`savings_balance = <financial>`) as in every persisted result.
+- **`discovery/trace.jsonl`** — the genuine discovery run (`anthropic`, `claude-sonnet-4-6`,
+  `model_calls = 4`, `GOAL_REACHED`). Sanitized structural events: the goal is recorded as
+  `goal_present`, values as `<param:member_number>`, routes as allowed patterns.
+- **`capability/member_lookup.v1.json`** — the typed capability compiled from that run
+  (3 steps: type member → search → extract the Share Savings current balance).
+- **`replay_success/result.json`** — deterministic replay for a **different** member (`54321`):
+  `success`, `model_calls = 0`, output masked (`savings_balance = <financial>`; the raw value is
+  returned to the caller on stdout, never persisted).
+- **`replay_business_outcome/result.json`** — replay for an **unknown** member (`99999`):
+  `business_outcome MEMBER_NOT_FOUND` — a legitimate domain answer, not a crash, `model_calls = 0`.
+
+## Write capability — `member.open_sub_account` (consequential mutation)
+
+- **`discovery_open_sub_account/trace.jsonl`** — the genuine write discovery (`model_calls = 9`,
+  `GOAL_REACHED`) including a `consequential_approval` event: the trusted kernel classified
+  "Create Account" as `CONSEQUENTIAL_WRITE` and a human authorized that one action.
+- **`discovery_open_sub_account/verification_provenance.json`** — maps the compiled verification
+  back to the discovery steps that produced it (steps 5–8:
+  `Member Inquiry → type <param:member_number> → Search → extract the sub-account status`),
+  so the independent verification is provably *discovered*, not authored.
+- **`capability/open_sub_account.v1.json`** — the compiled write capability (4 top-level steps)
+  with the **embedded read-only verification recipe** on the commit step.
+- **`replay_mutation/result.json`** — replay under `commit_then_timeout`: the write is dispatched
+  **exactly once**, the response is lost, and an independent read-back confirms the effect →
+  `success`, `model_calls = 0`, no double-write.
+- **`replay_mutation_ambiguous/result.json`** — replay under `commit_unverifiable`: the effect
+  cannot be established, so the runtime **never guesses** → `escalated MUTATION_AMBIGUOUS` plus a
+  sanitized **handoff case** (`intervention`) carrying the capability, step, reason, and structural
+  state. This is the **detect-and-route** half — the unattended runner raises the request and stops.
+
+## Human handoff — same-session takeover
+
+> **Intervention *raised* ≠ handoff *completed*.** `replay_mutation_ambiguous` above is a raised
+> request that the unattended runner routes and stops on. The three folders below are *completed*
+> handoffs: automation pauses, a human takes over the **same live session** (same Page/Context),
+> acts, and hands control back, and the run resumes/finishes. A `ControlLease` with monotonic
+> epochs is the ownership seam; automation is fenced while the human holds control.
+
+- **`discovery_handoff/`** — discovery-side handoff (`model_calls = 6`): the model looks up a
+  flagged account, is refused a consequential step (`RISK_CONFIRMATION_REQUIRED`), and proposes
+  `request_human` on its own (`model_call 4`). A human enters the code on the **same session** and
+  the model resumes to `GOAL_REACHED`.
+  - `trace.jsonl` — `intervention_raised (HUMAN_REQUESTED)`, `control_transferred`
+    (`automation → human`, epoch 1), a **recorded `human_action`** (`type` into the verification
+    field, value `<redacted>`), `control_transferred` (`human → automation`, epoch 2).
+  - `intervention.json` — the sanitized routed request (reason `HUMAN_REQUESTED`, structural
+    landmark `Identity Verification Required`, no screenshot, no member id).
+  - `member_lookup.v1.json` — the capability this handoff run produced.
+- **`replay_handoff/`** — replay-side handoff: replay meets an unexpected modal it cannot classify
+  (`UNKNOWN_DIALOG`), pauses, and a human resolves it on the **same live session** before automation
+  reconciles and completes.
+  - `intervention.json` — the sanitized request (reason `UNKNOWN_DIALOG`, structural landmarks,
+    no screenshot).
+  - `actions.jsonl` — the audited ownership transfers (`automation → human → automation`, epochs 1 → 2).
+  - `result.json` — `success` after handback, `model_calls = 0`, output masked.
+- **`replay_mutation_handoff/`** — the mutation takeover (`verification_dialog`): the commit
+  succeeds but the independent read is blocked by a dialog → `MUTATION_AMBIGUOUS`; a human takes the
+  **same session**, clears the blocker, and resumes; automation re-runs **only the read-only
+  verification** (never the write) and completes.
+  - `actions.jsonl` — the ownership transfers.
+  - `result.json` — `success` after recovery, `model_calls = 0` (the commit is never re-dispatched).
 
 ## Reproduce
 
-```bash
-uv run legacy-core                     # terminal 1: the target app
-export ANTHROPIC_API_KEY=...           # discovery only
-rm -f evidence/discovery/trace.jsonl   # the evidence store appends; start fresh
-uv run cua discover \
-  --goal "Look up this member and return their savings balance" \
-  --param member_number=12345 --target http://localhost:8000
-
-unset ANTHROPIC_API_KEY                # replay never needs a model
-# stdout returns the raw result to the caller; --evidence-out writes masked evidence
-uv run cua replay evidence/capability/member_lookup.v1.json \
-  --param member_number=54321 --evidence-out evidence/replay_success/result.json
-uv run cua replay evidence/capability/member_lookup.v1.json \
-  --param member_number=99999 --evidence-out evidence/replay_business_outcome/result.json
-
-# same-session human handoff (headed so a human can watch/act); the operator types
-# take -> ack -> resume. Piping those keystrokes reproduces the recorded evidence:
-printf 'take\nack\nresume\n' | uv run cua handoff-demo --headless \
-  --evidence-out evidence/replay_handoff
-
-# discovery-side handoff (needs ANTHROPIC_API_KEY): the live model asks for a human
-# on a flagged account; the operator enters the employee code, and the model resumes.
-export ANTHROPIC_API_KEY=...            # or place it in a local .env (git-ignored)
-printf 'take\nsubmit Employee Verification Code=4729\nresume\n' | \
-  uv run cua discover --headless --scenario verification_required \
-  --goal "Look up this member and return their current savings balance" \
-  -p member_number=12345 \
-  --evidence evidence/discovery_handoff/trace.jsonl \
-  --out /tmp/discovered_handoff.json
-```
+All of the above is regenerated by following [`../HOW_TO_DEMO.md`](../HOW_TO_DEMO.md) top to
+bottom (discovery needs a model key; replay needs none). Discovery is a live model run, so exact
+step counts vary slightly between runs; every claim above is what a fresh run produces in shape.

@@ -13,7 +13,7 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .enums import OutcomeClass, ParamType, RiskClass, Sensitivity
-from .values import Condition, DerivedValue, ParameterRef, ValueRef
+from .values import Condition, DerivedValue, ParameterRef, ReadBack, ValueRef
 
 SCHEMA_VERSION = "1.0"
 
@@ -187,6 +187,13 @@ class Step(BaseModel):
     postcondition: Condition | None = None
     outcomes: list[Outcome] = Field(default_factory=list)
     output: str | None = None
+    # Present only on a consequential commit step: declares how the mutation's effect
+    # is verified through an independent read after an uncertain completion.
+    read_back: ReadBack | None = None
+    # The discovered, embedded independent-verification recipe for a consequential
+    # write (supersedes read_back). A single flat read-only sequence — never a nested
+    # workflow — that re-derives the effect's view and observes it.
+    verification: MutationVerification | None = None
 
     @field_validator("id")
     @classmethod
@@ -216,7 +223,72 @@ class Step(BaseModel):
         # path, so the successful branch is explicit rather than implied.
         if self.outcomes and self.postcondition is None:
             raise ValueError("a step with outcomes must also have a normal-path postcondition")
+        if self.read_back is not None:
+            if not self.read_back.read_route.strip():
+                raise ValueError("read_back.read_route must be non-empty")
+            _forbid_matchers(
+                self.read_back.page_loaded,
+                _STEP_MATCHERS,
+                f"step {self.id!r} read_back.page_loaded",
+            )
+            _forbid_matchers(
+                self.read_back.effect_present,
+                _STEP_MATCHERS,
+                f"step {self.id!r} read_back.effect_present",
+            )
+        if self.verification is not None:
+            # A verification recipe belongs only on a consequential commit, and the two
+            # mutation representations are mutually exclusive.
+            if self.read_back is not None:
+                raise ValueError("a step cannot carry both read_back and verification")
+            if self.risk is RiskClass.READ_ONLY:
+                raise ValueError("verification is only valid on a consequential write step")
         return self
+
+
+class MutationVerification(BaseModel):
+    """The embedded, discovered recipe for independently confirming a consequential write.
+
+    It is a normalized execution unit, not a transcript fragment: the ``navigate``
+    steps are the read-only re-derivation the model performed after the commit (e.g.
+    return to inquiry, re-query the member by ``ParameterRef``, reach the accounts
+    view); ``page`` identifies that view so a baseline can be evaluated on it before
+    dispatch; ``effect_present`` is the effect matcher whose truth on that view proves
+    the write landed; ``extract`` optionally reads the declared output once present.
+
+    Deliberately flat and non-recursive: exactly one consequential write maps to one
+    ordered read-only sequence. A verification step may not itself carry mutation
+    metadata or be anything but read-only, so this can never become a workflow tree.
+    The artifact says where/how to verify; whether an *absent* effect is authoritative
+    enough to be a definite non-commit is a trusted-runtime decision, never serialized.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    navigate: list[Step]
+    page: Condition
+    effect_present: Condition
+    extract: Step | None = None
+
+    @model_validator(mode="after")
+    def _flat_and_read_only(self) -> Self:
+        recipe = [*self.navigate, *([self.extract] if self.extract is not None else [])]
+        if not recipe:
+            raise ValueError("verification must contain at least one read-only step")
+        for member in recipe:
+            if member.risk is not RiskClass.READ_ONLY:
+                raise ValueError("every verification step must be read_only")
+            if member.read_back is not None or member.verification is not None:
+                raise ValueError("a verification step cannot itself carry mutation metadata")
+        if self.extract is not None and self.extract.action.type != "extract":
+            raise ValueError("verification.extract must be an extract step")
+        _forbid_matchers(self.page, _STEP_MATCHERS, "verification.page")
+        _forbid_matchers(self.effect_present, _STEP_MATCHERS, "verification.effect_present")
+        return self
+
+
+# Step forward-references MutationVerification (embedded below it); resolve now that
+# both are defined.
+Step.model_rebuild()
 
 
 class InputSpec(BaseModel):
@@ -346,19 +418,29 @@ class Capability(BaseModel):
         output_names = set(self.outputs)
         produced: set[str] = set()
         for step in self.steps:
-            action = step.action
-            if isinstance(action, (TypeAction, SelectAction)):
-                for name in _parameter_names(action.value):
-                    if name not in input_names:
+            # An embedded verification's read-only steps carry the same provenance
+            # contract: their ParameterRefs must be declared inputs, and the terminal
+            # extract is what produces the declared success output.
+            action_steps = [step]
+            if step.verification is not None:
+                action_steps.extend(step.verification.navigate)
+                if step.verification.extract is not None:
+                    action_steps.append(step.verification.extract)
+            for member in action_steps:
+                action = member.action
+                if isinstance(action, (TypeAction, SelectAction)):
+                    for name in _parameter_names(action.value):
+                        if name not in input_names:
+                            raise ValueError(
+                                f"step {member.id!r}: ParameterRef {name!r} is not a declared input"
+                            )
+                if isinstance(action, ExtractAction) and member.output is not None:
+                    if member.output not in output_names:
                         raise ValueError(
-                            f"step {step.id!r}: ParameterRef {name!r} is not a declared input"
+                            f"step {member.id!r}: extract output {member.output!r} "
+                            "is not a declared output"
                         )
-            if isinstance(action, ExtractAction) and step.output is not None:
-                if step.output not in output_names:
-                    raise ValueError(
-                        f"step {step.id!r}: extract output {step.output!r} is not a declared output"
-                    )
-                produced.add(step.output)
+                    produced.add(member.output)
             if step.postcondition is not None:
                 _forbid_matchers(
                     step.postcondition, _STEP_MATCHERS, f"step {step.id!r} postcondition"

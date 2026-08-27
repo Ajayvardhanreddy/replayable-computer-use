@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from computer_use.execution import KernelExecution
+from computer_use.execution import ApprovalRequest, KernelExecution
 from computer_use.model import (
     Capability,
     EvidenceEvent,
@@ -39,6 +39,12 @@ _ALLOWED_ATTRIBUTES: dict[str, frozenset[str]] = {
     ),
     "human_action": frozenset({"epoch", "action", "target", "route", "value", "operator_id"}),
     "intervention_raised": frozenset({"reason", "model_call"}),
+    "mutation_verified": frozenset(
+        {"step_id", "effect_state", "read_back_attempted", "reason"}
+    ),
+    "consequential_approval": frozenset(
+        {"decision", "action", "target", "risk", "epoch", "model_call"}
+    ),
 }
 
 
@@ -128,6 +134,37 @@ def step_rejected_event(run_id: str, code: str) -> EvidenceEvent:
     )
 
 
+def consequential_approval_event(
+    run_id: str, decision: str, request: ApprovalRequest, model_call: int
+) -> EvidenceEvent:
+    """Audit a human authorization decision for a consequential action.
+
+    Structural only: the action, a target fingerprint, the risk class, the control
+    epoch, and the model-call index. The landmark (which may carry a member id) is
+    used only for the live staleness check and is never persisted.
+    """
+    fp = request.fingerprint
+    if fp.row_contains is not None:
+        target = f"cell[{fp.row_contains}/{fp.column_header}]"
+    elif fp.target_name:
+        target = f"{fp.target_role or 'element'}:{fp.target_name}"
+    else:
+        target = fp.target_role or "element"
+    return EvidenceEvent(
+        event="consequential_approval",
+        run_id=run_id,
+        ts=_now(),
+        attributes={
+            "decision": decision,
+            "action": fp.action,
+            "target": target,
+            "risk": request.risk.value,
+            "epoch": fp.epoch,
+            "model_call": model_call,
+        },
+    )
+
+
 def discovery_finished_event(run_id: str, model_calls: int, stop_reason: str) -> EvidenceEvent:
     return EvidenceEvent(
         event="discovery_finished",
@@ -168,6 +205,29 @@ def intervention_raised_event(run_id: str, reason: str, model_call: int) -> Evid
         run_id=run_id,
         ts=_now(),
         attributes={"reason": reason, "model_call": model_call},
+    )
+
+
+def mutation_verified_event(
+    run_id: str,
+    step_id: str | None,
+    effect_state: str,
+    read_back_attempted: bool,
+    reason: str,
+) -> EvidenceEvent:
+    """Records how a consequential mutation was resolved: the inferred effect state,
+    whether read-back was attempted, and a structural reason. No record values."""
+    return EvidenceEvent(
+        event="mutation_verified",
+        run_id=run_id,
+        ts=_now(),
+        step_id=step_id,
+        attributes={
+            "step_id": step_id,
+            "effect_state": effect_state,
+            "read_back_attempted": read_back_attempted,
+            "reason": reason,
+        },
     )
 
 

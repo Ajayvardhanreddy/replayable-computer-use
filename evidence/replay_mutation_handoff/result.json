@@ -1,0 +1,12 @@
+{
+  "result": {
+    "run_id": "run_25d1931f",
+    "model_calls": 0,
+    "status": "success",
+    "capability": "member.open_sub_account",
+    "version": 1,
+    "outputs": {
+      "sub_account_status": "OPEN"
+    }
+  }
+}

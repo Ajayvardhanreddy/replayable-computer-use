@@ -77,7 +77,7 @@ async def _one_live_run(
     lease = ControlLease()
     called: dict[str, bool] = {"handler": False}
 
-    async def human_handler(operator: OperatorController) -> bool:
+    async def human_handler(operator: OperatorController, reason: str | None = None) -> bool:
         called["handler"] = True  # only invoked because the real model proposed request_human
         operator.take_control()
         await operator.perform(

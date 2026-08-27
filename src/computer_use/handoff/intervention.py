@@ -29,6 +29,7 @@ class InterventionReason(StrEnum):
 
     UNKNOWN_DIALOG = "UNKNOWN_DIALOG"
     HUMAN_REQUESTED = "HUMAN_REQUESTED"
+    MUTATION_AMBIGUOUS = "MUTATION_AMBIGUOUS"
 
 
 class InterventionRequest(BaseModel):

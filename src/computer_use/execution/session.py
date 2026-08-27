@@ -25,19 +25,24 @@ from computer_use.model import (
     BusinessOutcome,
     Capability,
     Condition,
+    EffectState,
     Escalated,
     Failure,
     FailureCode,
+    MutationVerification,
     OutcomeClass,
     OutputSpec,
     ParamType,
     PolicyEffect,
     ProposedActionType,
+    RiskClass,
     RunResult,
     Step,
     Success,
 )
 from computer_use.safety import (
+    AuthorityPolicy,
+    ConfirmationPolicy,
     NavigationPolicy,
     Policy,
     RiskClassifier,
@@ -54,13 +59,22 @@ from computer_use.surface import (
     TargetNotFoundError,
 )
 
-from .kernel import KernelExecution, KernelRejection, RejectionCode, TrustedKernel, ValueResolver
+from .kernel import (
+    KernelExecution,
+    KernelRejection,
+    MutationDispatchUncertain,
+    RejectionCode,
+    TrustedKernel,
+    ValueResolver,
+)
 from .lease import ControlLease
 
-# A stable, generic reason for an observed blocking state the deterministic artifact
-# does not model. It is a plain string here so the execution layer stays free of the
-# handoff layer; the operator surface maps it onto its typed InterventionReason.
+# Stable reason codes (plain strings so the execution layer stays free of the handoff
+# layer; the operator surface maps them onto its typed InterventionReason). UNKNOWN_DIALOG
+# is an unmodeled blocking state; MUTATION_AMBIGUOUS is a consequential write whose effect
+# could not be established by read-back.
 UNKNOWN_DIALOG = "UNKNOWN_DIALOG"
+MUTATION_AMBIGUOUS = "MUTATION_AMBIGUOUS"
 
 _REPLAY_ACTIONS = frozenset(
     {ProposedActionType.CLICK, ProposedActionType.TYPE, ProposedActionType.EXTRACT}
@@ -153,6 +167,26 @@ def _coerce_output(value: str, spec: OutputSpec | None) -> str:
     if spec is not None and spec.type is ParamType.DECIMAL:
         return value.replace("$", "").replace(",", "").strip()
     return value
+
+
+def _sole_verification(capability: Capability) -> MutationVerification | None:
+    """The one consequential write's embedded verification recipe, if the capability
+    has one. Capability construction admits at most one, so the first is authoritative."""
+    for step in capability.steps:
+        if step.verification is not None:
+            return step.verification
+    return None
+
+
+_ACTION_BY_TYPE = {
+    "click": ProposedActionType.CLICK,
+    "type": ProposedActionType.TYPE,
+    "extract": ProposedActionType.EXTRACT,
+}
+
+
+def _step_action(step: Step) -> ProposedActionType:
+    return _ACTION_BY_TYPE[step.action.type]
 
 
 async def _matches(surface: Surface, condition: Condition) -> bool:
@@ -253,8 +287,12 @@ class ReplaySession:
         resolve_timeout_ms: int = _RESOLVE_TIMEOUT_MS,
         secrets: SecretProvider | None = None,
         lease: ControlLease | None = None,
+        confirmation: ConfirmationPolicy | None = None,
+        commit_timeout_ms: int | None = None,
+        authority: AuthorityPolicy | None = None,
     ) -> None:
         self._capability = capability
+        self._inputs = inputs
         self._target_url = target_url
         self._nav_policy = nav_policy
         self._resolve_timeout_ms = resolve_timeout_ms
@@ -262,16 +300,34 @@ class ReplaySession:
         self.owns_surface = surface is None
         self.surface: Surface = surface if surface is not None else PlaywrightSurface()
         self.lease = lease if lease is not None else ControlLease()
+        # The classifier is shared with the kernel and reused to independently derive
+        # risk during verification (defense in depth: a verification step must be read-only).
+        self._classifier = RiskClassifier(safe_click_names=safe_clicks)
+        # Trusted authority over verification read sources: whether an absent effect is a
+        # definite non-commit. Conservative by default (absence -> ambiguous, not failure).
+        self._authority = authority if authority is not None else AuthorityPolicy()
         self._kernel = TrustedKernel(
             self.surface,
             Policy(allowed_actions=_REPLAY_ACTIONS),
-            RiskClassifier(safe_click_names=safe_clicks),
+            self._classifier,
             ValueResolver(inputs, secrets),
+            confirmation=confirmation,
             lease=self.lease,
+            commit_timeout_ms=commit_timeout_ms,
         )
         self._outputs: dict[str, str] = {}
         self._cursor = 0
         self.pending: InterventionSignal | None = None
+        # Certainty telemetry for the most recent consequential mutation (exposed for
+        # evidence at the persistence boundary; the session never imports observability).
+        self.last_effect_state: EffectState = EffectState.NOT_DISPATCHED
+        self.last_read_back_attempted = False
+        self.last_effect_reason = ""
+        self._pending_commit: Step | None = None
+        # The single consequential write's verification recipe (if any) and the trusted
+        # pre-dispatch baseline: True/False once evaluated on the effect view, else None.
+        self._commit_verification: MutationVerification | None = _sole_verification(capability)
+        self._baseline_present: bool | None = None
 
     @property
     def nav_policy(self) -> NavigationPolicy:
@@ -342,6 +398,304 @@ class ReplaySession:
             model_calls=0,
         )
 
+    def _operation_id(self, step: Step) -> str:
+        """Confirmation approval is scoped to a specific trusted operation, so an approval
+        for one capability's step cannot authorize another capability's same-named step."""
+        return f"{self._capability.id}:v{self._capability.version}:{step.id}"
+
+    def _resolve_route(self, route_pattern: str) -> str:
+        """Concrete read-back URL: substitute :param segments from the invocation inputs."""
+        segments = [
+            self._inputs.get(seg[1:], seg) if seg.startswith(":") and len(seg) > 1 else seg
+            for seg in route_pattern.split("/")
+        ]
+        return self._target_url.rstrip("/") + "/".join(segments)
+
+    def _commit_success(self) -> Success:
+        return Success(
+            run_id=self.run_id,
+            capability=self._capability.id,
+            version=self._capability.version,
+            outputs=dict(self._outputs),
+            model_calls=0,
+        )
+
+    def _mutation_ambiguous(self, step: Step, reason: str) -> Escalated:
+        self.last_effect_state = EffectState.AMBIGUOUS
+        self.last_effect_reason = reason
+        self._pending_commit = step
+        return self._escalate(MUTATION_AMBIGUOUS, step)
+
+    async def _run_commit(self, step: Step) -> RunResult:
+        """Execute a consequential commit exactly once, then establish its effect.
+
+        The dispatch is not wrapped in transient retry: everything before the click is
+        pre-dispatch (a failure there is a normal, definitely-not-dispatched Failure);
+        once the click is invoked the effect may have happened, so an uncertain
+        completion is resolved by read-back, never by re-dispatching.
+        """
+        self.last_effect_state = EffectState.DISPATCHING
+        self.last_read_back_attempted = False
+        self.last_effect_reason = ""
+        try:
+            await self._kernel.execute_step(
+                step, epoch=self.lease.epoch, operation_id=self._operation_id(step)
+            )
+        except KernelRejection as rejection:
+            self.last_effect_state = EffectState.NOT_DISPATCHED
+            self.last_effect_reason = "not dispatched: authorization or resolution refused"
+            return Failure(
+                run_id=self.run_id,
+                code=_failure_code(rejection.code),
+                step_id=step.id,
+                observed=await _observe(self.surface, self._routes),
+                retryable=False,
+                model_calls=0,
+            )
+        except MutationDispatchUncertain:
+            self.last_effect_state = EffectState.DISPATCHED
+            return await self._verify_after_dispatch(step)
+        except SurfaceError as error:
+            self.last_effect_state = EffectState.NOT_DISPATCHED
+            return _surface_failure(self.run_id, error, step.id)
+        # Dispatch returned. Judge the completion signal on the current page.
+        self.last_effect_state = EffectState.DISPATCHED
+        try:
+            await self.surface.wait_settled()
+            denied = _nav_denied(
+                self.run_id, self._nav_policy, await self.surface.current_url(), step.id
+            )
+            if denied is not None:
+                return denied
+            kind, code = await self._resolve_commit_outcome(step)
+        except SurfaceError:
+            return await self._verify_after_dispatch(step)
+        if kind == "outcome":
+            self.last_effect_state = EffectState.NOT_COMMITTED
+            self.last_effect_reason = f"explicit application rejection: {code}"
+            return BusinessOutcome(
+                run_id=self.run_id, capability=self._capability.id, code=code or "", model_calls=0
+            )
+        if kind == "committed":
+            self.last_effect_state = EffectState.COMMITTED
+            self.last_effect_reason = "success confirmation observed"
+            return self._commit_success()
+        return await self._verify_after_dispatch(step)
+
+    async def _resolve_commit_outcome(self, step: Step) -> tuple[str, str | None]:
+        """Race explicit rejection outcomes against the success postcondition after a
+        commit dispatch. Returns ('outcome', code) | ('committed', None) | ('uncertain', None)."""
+        waited = 0
+        while True:
+            try:
+                for outcome in step.outcomes:
+                    if outcome.outcome_class is OutcomeClass.BUSINESS_OUTCOME and await _matches(
+                        self.surface, outcome.detector
+                    ):
+                        return ("outcome", outcome.code)
+                if step.postcondition is not None and await _matches(
+                    self.surface, step.postcondition
+                ):
+                    return ("committed", None)
+            except SurfaceTransientError:
+                pass
+            if waited >= self._resolve_timeout_ms:
+                return ("uncertain", None)
+            await asyncio.sleep(0.1)
+            waited += 100
+
+    async def _verify_after_dispatch(self, step: Step) -> RunResult:
+        """Establish a dispatched mutation's effect through an independent read path."""
+        self.last_read_back_attempted = True
+        read_back = step.read_back
+        assert read_back is not None
+        url = self._resolve_route(read_back.read_route)
+        if _nav_denied(self.run_id, self._nav_policy, url, step.id) is not None:
+            return self._mutation_ambiguous(step, "read-back route out of scope")
+        try:
+            await self.surface.goto(url)
+            await self.surface.wait_settled()
+            loaded = await _matches(self.surface, read_back.page_loaded)
+            present = await _matches(self.surface, read_back.effect_present)
+        except SurfaceError:
+            return self._mutation_ambiguous(step, "read-back could not load")
+        if present:
+            self.last_effect_state = EffectState.COMMITTED
+            self.last_effect_reason = "read-back: effect present"
+            return self._commit_success()
+        if loaded and read_back.authoritative:
+            # Absence is a definite non-commit only on an authoritative read source.
+            self.last_effect_state = EffectState.NOT_COMMITTED
+            self.last_effect_reason = "read-back: effect absent on authoritative read"
+            return Failure(
+                run_id=self.run_id,
+                code=FailureCode.MUTATION_NOT_COMMITTED,
+                step_id=step.id,
+                observed=await _observe(self.surface, self._routes),
+                retryable=False,
+                model_calls=0,
+            )
+        return self._mutation_ambiguous(step, "read-back: effect could not be established")
+
+    async def _maybe_capture_baseline(self) -> None:
+        """Record the effect's presence on its view before the write, for attribution."""
+        verification = self._commit_verification
+        if verification is None:
+            return
+        try:
+            if await _matches(self.surface, verification.page):
+                self._baseline_present = await _matches(self.surface, verification.effect_present)
+        except SurfaceError:
+            pass  # baseline stays unestablished; a later present effect will be ambiguous
+
+    async def _run_commit_verified(self, step: Step) -> RunResult:
+        """A consequential write with an embedded, discovered verification recipe.
+
+        Dispatch exactly once (never wrapped in transient retry); an explicit rejection
+        on the immediate response is a business outcome; otherwise — clean or uncertain —
+        confirm the effect through the discovered independent read. The write is never
+        re-issued regardless of how its completion looked.
+        """
+        verification = step.verification
+        assert verification is not None
+        self.last_effect_state = EffectState.DISPATCHING
+        self.last_read_back_attempted = False
+        self.last_effect_reason = ""
+        try:
+            await self._kernel.execute_step(
+                step, epoch=self.lease.epoch, operation_id=self._operation_id(step)
+            )
+        except KernelRejection as rejection:
+            self.last_effect_state = EffectState.NOT_DISPATCHED
+            self.last_effect_reason = "not dispatched: authorization or resolution refused"
+            return Failure(
+                run_id=self.run_id,
+                code=_failure_code(rejection.code),
+                step_id=step.id,
+                observed=await _observe(self.surface, self._routes),
+                retryable=False,
+                model_calls=0,
+            )
+        except MutationDispatchUncertain:
+            self.last_effect_state = EffectState.DISPATCHED
+            return await self._verify_embedded(step, verification)
+        except SurfaceError as error:
+            self.last_effect_state = EffectState.NOT_DISPATCHED
+            return _surface_failure(self.run_id, error, step.id)
+        # Dispatch returned. An explicit application rejection is a business outcome and
+        # is decided before any verification; otherwise verify the effect independently.
+        self.last_effect_state = EffectState.DISPATCHED
+        try:
+            await self.surface.wait_settled()
+            for outcome in step.outcomes:
+                if outcome.outcome_class is OutcomeClass.BUSINESS_OUTCOME and await _matches(
+                    self.surface, outcome.detector
+                ):
+                    self.last_effect_state = EffectState.NOT_COMMITTED
+                    self.last_effect_reason = f"explicit application rejection: {outcome.code}"
+                    return BusinessOutcome(
+                        run_id=self.run_id, capability=self._capability.id,
+                        code=outcome.code, model_calls=0,
+                    )
+        except SurfaceError:
+            pass  # fall through to independent verification
+        return await self._verify_embedded(step, verification)
+
+    async def _assert_read_only(self, vstep: Step) -> bool:
+        """Runtime verification-mode gate: refuse any verification step whose software-
+        derived risk is not READ_ONLY, independent of what the artifact claims."""
+        if vstep.target is None:
+            return False
+        risk = self._classifier.classify(_step_action(vstep), vstep.target)
+        return risk is RiskClass.READ_ONLY
+
+    async def _verify_embedded(self, step: Step, v: MutationVerification) -> RunResult:
+        """Establish the effect through the discovered read-only re-derivation.
+
+        Runs the verification steps under a read-only-enforced mode, evaluates the effect
+        on its view, and attributes a commit only as a baseline-absent -> present
+        transition. Declared outputs are read (and published) only once the effect is
+        confirmed present, so a failed/ambiguous verification never leaks a result.
+        """
+        self.last_read_back_attempted = True
+        try:
+            for vstep in v.navigate:
+                if not await self._assert_read_only(vstep):
+                    return self._mutation_ambiguous(step, "verification step is not read-only")
+                await self._execute_step(vstep)
+                await self.surface.wait_settled()
+                denied = _nav_denied(
+                    self.run_id, self._nav_policy, await self.surface.current_url(), step.id
+                )
+                if denied is not None:
+                    return self._mutation_ambiguous(step, "verification navigated out of scope")
+            # An unexpected blocking dialog on the read means the effect cannot be
+            # trusted from this page: escalate rather than read past it. Recoverable —
+            # a human can clear it and resume, which re-runs verification (not the write).
+            if await self.surface.has_blocking_dialog():
+                return self._mutation_ambiguous(step, "verification blocked by a dialog")
+            on_view = await _matches(self.surface, v.page)
+            present = on_view and await _matches(self.surface, v.effect_present)
+        except SurfaceError:
+            return self._mutation_ambiguous(step, "verification could not establish effect view")
+        if not on_view:
+            return self._mutation_ambiguous(step, "verification did not reach effect view")
+        if present:
+            if self._baseline_present is not False:
+                # Absent-before could not be established (or the effect pre-existed): the
+                # present effect cannot be attributed to this write.
+                return self._mutation_ambiguous(
+                    step, "effect not attributable: baseline was not established absent"
+                )
+            if v.extract is not None:
+                try:
+                    if not await self._assert_read_only(v.extract):
+                        return self._mutation_ambiguous(step, "verification extract not read-only")
+                    execution = await self._execute_step(v.extract)
+                    if v.extract.output is not None and execution.extracted is not None:
+                        self._outputs[v.extract.output] = _coerce_output(
+                            execution.extracted, self._capability.outputs.get(v.extract.output)
+                        )
+                except SurfaceError:
+                    return self._mutation_ambiguous(
+                        step, "effect present but its output could not be read"
+                    )
+            self.last_effect_state = EffectState.COMMITTED
+            self.last_effect_reason = "verification: effect present"
+            return self._commit_success()
+        if self._baseline_present is False and self._authority.absence_is_authoritative():
+            self.last_effect_state = EffectState.NOT_COMMITTED
+            self.last_effect_reason = "verification: effect absent on authoritative read"
+            return Failure(
+                run_id=self.run_id,
+                code=FailureCode.MUTATION_NOT_COMMITTED,
+                step_id=step.id,
+                observed=await _observe(self.surface, self._routes),
+                retryable=False,
+                model_calls=0,
+            )
+        return self._mutation_ambiguous(step, "verification: effect could not be established")
+
+    async def reverify_mutation(self) -> RunResult:
+        """Re-establish a paused ambiguous mutation after a human makes state observable.
+
+        Re-runs the same independent verification; resolves to Success /
+        MUTATION_NOT_COMMITTED, or stays paused (Escalated) if still uncertain. Never
+        re-dispatches the write.
+        """
+        step = self._pending_commit
+        if step is None:
+            return self._commit_success()
+        if step.verification is not None:
+            result: RunResult = await self._verify_embedded(step, step.verification)
+        else:
+            result = await self._verify_after_dispatch(step)
+        if isinstance(result, Escalated):
+            return result
+        self.pending = None
+        self._pending_commit = None
+        return result
+
     async def advance(self) -> RunResult:
         """Run steps from the current cursor to a terminal result or an intervention.
 
@@ -364,6 +718,14 @@ class ReplaySession:
                 # so acting now would be unsafe. Route it to a human instead.
                 if await self.surface.has_blocking_dialog():
                     return self._escalate(UNKNOWN_DIALOG, step)
+                # A consequential write: dispatch once, then confirm the effect through
+                # its discovered independent verification rather than retrying. The
+                # embedded recipe is the current representation; read_back is the prior
+                # self-contained form still honored for existing artifacts.
+                if step.verification is not None:
+                    return await self._run_commit_verified(step)
+                if step.read_back is not None:
+                    return await self._run_commit(step)
                 try:
                     execution = await self._execute_step(step)
                     if step.output is not None and execution.extracted is not None:
@@ -388,6 +750,12 @@ class ReplaySession:
                         retryable=False,
                         model_calls=0,
                     )
+                except MutationDispatchUncertain:
+                    # A consequential dispatch the artifact did not declare a read-back for:
+                    # the effect may have happened and cannot be verified here. Fail closed
+                    # to a human rather than retrying.
+                    self.last_effect_state = EffectState.AMBIGUOUS
+                    return self._escalate(MUTATION_AMBIGUOUS, step)
                 except SurfaceError as error:
                     # Driver failure, exhausted transient, or a mid-act target race.
                     return _surface_failure(self.run_id, error, step.id)
@@ -408,6 +776,10 @@ class ReplaySession:
                         retryable=False,
                         model_calls=0,
                     )
+                # Trusted pre-dispatch baseline: whenever replay is on the effect view
+                # before the write, evaluate the discovered effect matcher. Absence here
+                # is what makes a later present effect attributable to this write.
+                await self._maybe_capture_baseline()
                 self._cursor += 1
             return await self._finish()
         except SurfaceError as error:

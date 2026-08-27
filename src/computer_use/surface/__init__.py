@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .base import (
+    BlockerObservation,
     Candidate,
     Observation,
     StructuralSnapshot,
@@ -16,6 +17,7 @@ from .base import (
 from .playwright_surface import PlaywrightSurface
 
 __all__ = [
+    "BlockerObservation",
     "Candidate",
     "Observation",
     "PlaywrightSurface",

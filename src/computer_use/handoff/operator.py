@@ -204,6 +204,20 @@ class OperatorController:
             )
         if session.lease.owner is not ControlOwner.HUMAN:
             raise OperatorError("resume requires the operator to currently hold control")
+        # An ambiguous mutation is resolved by re-establishing the effect, not by
+        # checkpoint reconciliation. Hand control back to automation first: the embedded
+        # verification re-runs its read-only steps through the kernel, which fences
+        # automation while the human holds the lease. It re-verifies only, never the write.
+        if session.pending is not None and session.pending.reason == "MUTATION_AMBIGUOUS":
+            resumed = session.lease.to_automation()
+            self._audit_transfer(ControlOwner.HUMAN, ControlOwner.AUTOMATION, resumed)
+            mutation_result = await session.reverify_mutation()
+            if isinstance(mutation_result, Escalated):
+                # Still ambiguous: return control to the human to resolve and retry.
+                held = session.lease.to_human()
+                self._audit_transfer(ControlOwner.AUTOMATION, ControlOwner.HUMAN, held)
+                return mutation_result
+            return mutation_result
         # Judge readiness while the human still owns the session (reads only).
         outcome = await session.assess_reconciliation()
         if isinstance(outcome, Escalated):

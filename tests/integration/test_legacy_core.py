@@ -1,8 +1,15 @@
+import pytest
 from fastapi.testclient import TestClient
 
+from legacy_core import mutations
 from legacy_core.app import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _reset_mutations() -> None:
+    mutations.reset()
 
 
 def test_shell_serves_with_single_iframe_and_context() -> None:
@@ -124,6 +131,37 @@ def test_sidebar_exposes_only_member_inquiry_as_route() -> None:
         assert f">{section}</span>" in body
 
 
+def test_sub_account_review_and_normal_commit() -> None:
+    review = client.get("/workspace/member/12345/sub-account").text
+    assert "Open Sub-Account" in review and "Create Account" in review
+    created = client.post("/workspace/member/12345/sub-account")
+    assert "Sub-account created" in created.text
+    assert mutations.commit_dispatch_count() == 1
+    assert "Share Savings Sub" in client.get("/workspace/member/12345").text
+
+
+def test_sub_account_second_commit_is_rejected() -> None:
+    client.post("/workspace/member/12345/sub-account")
+    second = client.post("/workspace/member/12345/sub-account")
+    assert "A sub-account of this type already exists" in second.text
+    assert mutations.commit_dispatch_count() == 2  # dispatch counted, but not a second create
+
+
+def test_commit_then_timeout_commits_before_withholding() -> None:
+    # The mutation is applied even though the completion signal is ambiguous.
+    resp = client.post(
+        "/workspace/member/12345/sub-account", params={"scenario": "commit_ambiguous"}
+    )
+    assert "The request was interrupted" in resp.text
+    assert mutations.has_sub_account("12345")  # committed despite the ambiguous page
+
+
+def test_commit_dropped_does_not_commit() -> None:
+    resp = client.post("/workspace/member/12345/sub-account", params={"scenario": "commit_dropped"})
+    assert "The request was interrupted" in resp.text
+    assert not mutations.has_sub_account("12345")
+
+
 def test_unexpected_dialog_makes_underlying_content_inert() -> None:
     normal = client.get("/workspace/member/12345").text
     assert '<section class="gc2">' in normal
@@ -134,3 +172,12 @@ def test_unexpected_dialog_makes_underlying_content_inert() -> None:
     # The notice genuinely owns interaction: underlying profile content is inert
     # (removed from tab order and the accessibility tree) until acknowledged.
     assert '<section class="gc2" inert>' in dialog
+
+
+def test_reset_clears_demo_state() -> None:
+    mutations.create_sub_account("12345")
+    assert mutations.has_sub_account("12345")
+    resp = client.post("/reset")
+    assert resp.status_code == 200
+    assert resp.json() == {"reset": True}
+    assert not mutations.has_sub_account("12345")

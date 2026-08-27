@@ -1,0 +1,34 @@
+{
+  "result": {
+    "run_id": "run_e3b67e65",
+    "model_calls": 0,
+    "status": "escalated",
+    "code": "MUTATION_AMBIGUOUS",
+    "step_id": "step_4_click",
+    "intervention_id": "int_1ca3d3d7"
+  },
+  "intervention": {
+    "intervention_id": "int_1ca3d3d7",
+    "run_id": "run_e3b67e65",
+    "capability": "member.open_sub_account",
+    "version": 1,
+    "step_id": "step_4_click",
+    "reason": "MUTATION_AMBIGUOUS",
+    "control_owner": "automation",
+    "control_epoch": 0,
+    "route": "/",
+    "evidence": {
+      "policy": "structural_only",
+      "route": "/",
+      "frames": [
+        "main",
+        "lc-workspace"
+      ],
+      "landmarks": [
+        "Read interrupted"
+      ],
+      "screenshot": null
+    },
+    "ts": "2026-08-26T18:11:59.899451Z"
+  }
+}

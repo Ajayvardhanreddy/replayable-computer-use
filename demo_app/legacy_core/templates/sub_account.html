@@ -1,0 +1,24 @@
+{% extends "workspace_base.html" %}
+{% block title %}Open Sub-Account{% endblock %}
+{% block content %}
+<section class="gc2">
+{% if state == "created" %}
+  <h1 class="lc-h1">Sub-account created <span class="lc-panel">Member {{ member_number }}</span></h1>
+  <p class="lc-status">A {{ label }} sub-account was opened for this member.</p>
+{% elif state == "pending" %}
+  <h1 class="lc-h1">Request interrupted <span class="lc-panel">Member {{ member_number }}</span></h1>
+  <p class="lc-alert" role="alert">The request was interrupted. The account status could not be confirmed.</p>
+{% else %}{# review or rejected #}
+  <h1 class="lc-h1">Open Sub-Account <span class="lc-panel">Member {{ member_number }}</span></h1>
+  {% if state == "rejected" %}
+  <p class="lc-alert" role="alert">A sub-account of this type already exists.</p>
+  {% endif %}
+  <p class="lc-note">You are about to open a {{ label }} sub-account for this member.</p>
+  <form method="post" action="/workspace/member/{{ member_number }}/sub-account{{ scenario_suffix }}" class="tbl-9">
+    <div class="lc-actions">
+      <button type="submit" class="x-b1">Create Account</button>
+    </div>
+  </form>
+{% endif %}
+</section>
+{% endblock %}

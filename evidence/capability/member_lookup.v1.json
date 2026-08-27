@@ -42,7 +42,9 @@
       "risk": "read_only",
       "postcondition": null,
       "outcomes": [],
-      "output": null
+      "output": null,
+      "read_back": null,
+      "verification": null
     },
     {
       "id": "step_2_click",
@@ -82,7 +84,9 @@
           }
         }
       ],
-      "output": null
+      "output": null,
+      "read_back": null,
+      "verification": null
     },
     {
       "id": "step_3_extract",
@@ -104,7 +108,9 @@
       "risk": "read_only",
       "postcondition": null,
       "outcomes": [],
-      "output": "savings_balance"
+      "output": "savings_balance",
+      "read_back": null,
+      "verification": null
     }
   ],
   "success_checkpoint": {

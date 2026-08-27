@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from uuid import uuid4
 
 from computer_use.model import (
     ClickAction,
@@ -35,8 +36,9 @@ from computer_use.safety import (
     RiskClassifier,
     SecretProvider,
 )
-from computer_use.surface import Candidate, Surface
+from computer_use.surface import Candidate, Surface, SurfaceError
 
+from .approval import ApprovalGrant, ApprovalRequest, ApprovalRequired, fingerprint_of
 from .lease import ControlLease, ControlLeaseError
 
 _EXECUTABLE = frozenset(
@@ -54,6 +56,7 @@ class RejectionCode(StrEnum):
     TARGET_MISSING = "TARGET_MISSING"
     LOCATOR_AMBIGUOUS = "LOCATOR_AMBIGUOUS"
     RISK_CONFIRMATION_REQUIRED = "RISK_CONFIRMATION_REQUIRED"
+    APPROVAL_STALE = "APPROVAL_STALE"
     UNKNOWN_PARAMETER = "UNKNOWN_PARAMETER"
     UNSUPPORTED_VALUE = "UNSUPPORTED_VALUE"
     SECRET_UNAVAILABLE = "SECRET_UNAVAILABLE"
@@ -65,6 +68,20 @@ class KernelRejection(Exception):
         self.code = code
         self.detail = detail
         super().__init__(f"{code.value}: {detail}" if detail else code.value)
+
+
+class MutationDispatchUncertain(Exception):
+    """A consequential write was dispatched and its outcome is not yet known.
+
+    Raised only from the dispatch call itself (never from resolution/authorization,
+    which precede any side effect). The effect may have reached the application, so
+    the action must not be retried; the runtime verifies through read-back.
+    """
+
+    def __init__(self, operation_id: str, target: TargetDescriptor) -> None:
+        self.operation_id = operation_id
+        self.target = target
+        super().__init__(f"consequential dispatch uncertain: {operation_id or '<unknown>'}")
 
 
 @dataclass(frozen=True)
@@ -129,12 +146,22 @@ class TrustedKernel:
         values: ValueResolver,
         confirmation: ConfirmationPolicy | None = None,
         lease: ControlLease | None = None,
+        commit_timeout_ms: int | None = None,
+        interactive_approval: bool = False,
     ) -> None:
         self._surface = surface
         self._policy = policy
         self._classifier = classifier
         self._values = values
         self._confirmation = confirmation if confirmation is not None else ConfirmationPolicy()
+        # Bounded timeout applied to a consequential click so a withheld completion
+        # fails fast as an uncertain dispatch instead of hanging.
+        self._commit_timeout_ms = commit_timeout_ms
+        # When enabled (discovery/authoring), a consequential action with no standing
+        # approval raises a typed ApprovalRequired for orchestration to resolve with a
+        # human, rather than a terminal RISK_CONFIRMATION_REQUIRED. Off by default, so
+        # replay through a static ConfirmationPolicy is unchanged.
+        self._interactive_approval = interactive_approval
         # When a lease is present, automation may act only while it owns the session
         # at the expected epoch; otherwise every side effect fails closed. Absent a
         # lease the kernel behaves as an unguarded single-owner authority path.
@@ -145,8 +172,14 @@ class TrustedKernel:
         proposal: ProposedAction,
         candidates: dict[str, Candidate],
         epoch: int | None = None,
+        approval: ApprovalGrant | None = None,
     ) -> KernelExecution:
-        """Discovery entry point: validate + resolve a model proposal, then act."""
+        """Discovery entry point: validate + resolve a model proposal, then act.
+
+        A consequential proposal may require a one-time ``approval`` (see the
+        interactive approval seam); the kernel re-resolves and re-fingerprints the
+        operation here and validates the grant immediately before dispatch.
+        """
         action = proposal.action
         if action not in _EXECUTABLE:
             raise KernelRejection(RejectionCode.NOT_EXECUTABLE, action.value)
@@ -157,11 +190,18 @@ class TrustedKernel:
             raise KernelRejection(RejectionCode.UNKNOWN_CANDIDATE, proposal.candidate_id)
         target = _descriptor_from_candidate(candidate)
         return await self._authorize_and_execute(
-            action, target, proposal.value, proposal.output, operation_id=None, epoch=epoch
+            action, target, proposal.value, proposal.output,
+            operation_id=None, epoch=epoch, approval=approval,
         )
 
-    async def execute_step(self, step: Step, epoch: int | None = None) -> KernelExecution:
-        """Replay entry point: execute a compiled step through the same authority path."""
+    async def execute_step(
+        self, step: Step, epoch: int | None = None, operation_id: str | None = None
+    ) -> KernelExecution:
+        """Replay entry point: execute a compiled step through the same authority path.
+
+        ``operation_id`` scopes the confirmation approval to a specific trusted
+        operation (e.g. capability + version + step); it defaults to the step id.
+        """
         if step.target is None:
             raise KernelRejection(RejectionCode.UNRESOLVABLE_CANDIDATE, "step has no target")
         value: ValueRef | None = None
@@ -175,7 +215,8 @@ class TrustedKernel:
         else:
             raise KernelRejection(RejectionCode.NOT_EXECUTABLE, step.action.type)
         return await self._authorize_and_execute(
-            action, step.target, value, step.output, operation_id=step.id, epoch=epoch
+            action, step.target, value, step.output,
+            operation_id=operation_id if operation_id is not None else step.id, epoch=epoch,
         )
 
     def _assert_may_act(self, epoch: int | None) -> None:
@@ -195,6 +236,7 @@ class TrustedKernel:
         output: str | None,
         operation_id: str | None,
         epoch: int | None = None,
+        approval: ApprovalGrant | None = None,
     ) -> KernelExecution:
         # Ownership gate first: while a human holds the lease (or the epoch is stale),
         # automation touches nothing on the surface — not even target resolution.
@@ -222,17 +264,35 @@ class TrustedKernel:
         if risk is not RiskClass.READ_ONLY:
             # A consequential action dispatches only if this specific operation is
             # approved; an irreversible action is never auto-approved.
-            if risk is RiskClass.IRREVERSIBLE or not self._confirmation.is_approved(operation_id):
-                raise KernelRejection(RejectionCode.RISK_CONFIRMATION_REQUIRED, risk.value)
+            statically_approved = self._confirmation.is_approved(operation_id)
+            if risk is RiskClass.IRREVERSIBLE or not statically_approved:
+                interactive = (
+                    self._interactive_approval
+                    and risk is not RiskClass.IRREVERSIBLE
+                    and not statically_approved
+                )
+                if interactive:
+                    await self._require_one_time_approval(action, resolved, epoch, approval)
+                else:
+                    raise KernelRejection(RejectionCode.RISK_CONFIRMATION_REQUIRED, risk.value)
 
         # Re-check ownership immediately before the side effect: a human may have
         # taken over while the target was being resolved, superseding this epoch.
         self._assert_may_act(epoch)
 
-        # Execute.
+        # Execute. The dispatch boundary is the click call itself: everything above
+        # (resolution, policy, confirmation, ownership) precedes any side effect, so a
+        # failure there is definitely NOT_DISPATCHED. Once a consequential click is
+        # invoked, a failure means the effect may have committed -> uncertain, no retry.
         extracted: str | None = None
         if action is ProposedActionType.CLICK:
-            await self._surface.click(resolved)
+            if risk is RiskClass.READ_ONLY:
+                await self._surface.click(resolved)
+            else:
+                try:
+                    await self._surface.click(resolved, timeout_ms=self._commit_timeout_ms)
+                except SurfaceError as error:
+                    raise MutationDispatchUncertain(operation_id or "", resolved) from error
         elif action is ProposedActionType.TYPE:
             assert value is not None
             await self._surface.type_text(resolved, self._values.resolve(value))
@@ -241,6 +301,35 @@ class TrustedKernel:
         return KernelExecution(
             action=action, target=resolved, risk=risk, value=value, extracted=extracted
         )
+
+    async def _require_one_time_approval(
+        self,
+        action: ProposedActionType,
+        resolved: TargetDescriptor,
+        epoch: int | None,
+        approval: ApprovalGrant | None,
+    ) -> None:
+        """Emit or validate a one-time human approval for a consequential action.
+
+        The fingerprint binds the operation to the resolved target and the current
+        landmark, computed here — immediately before dispatch, after re-resolution.
+        With no grant, a typed requirement is raised for orchestration to resolve.
+        With a grant whose fingerprint no longer matches the live operation, the
+        approval is stale (the page moved between request and grant) and dispatch is
+        refused so orchestration re-observes. The kernel never prompts a human.
+        """
+        landmark = await self._surface.primary_heading()
+        current = fingerprint_of(action, resolved, landmark, epoch)
+        if approval is None:
+            raise ApprovalRequired(
+                ApprovalRequest(proposal_nonce=uuid4().hex, risk=RiskClass.CONSEQUENTIAL_WRITE,
+                                fingerprint=current)
+            )
+        if approval.fingerprint != current:
+            raise KernelRejection(
+                RejectionCode.APPROVAL_STALE,
+                "the operation or its observable state changed before authorization",
+            )
 
     async def _resolve_target(self, target: TargetDescriptor) -> TargetDescriptor:
         """Resolve the primary then ordered fallbacks to a uniquely-matching descriptor.

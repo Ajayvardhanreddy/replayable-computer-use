@@ -87,3 +87,23 @@ class Condition(BaseModel):
 
 
 Condition.model_rebuild()
+
+
+class ReadBack(BaseModel):
+    """How a mutation's effect is verified through an independent read path.
+
+    After a consequential write whose normal completion is lost, the runtime does
+    not infer success from the click. It navigates ``read_route`` for a fresh read
+    and judges the effect from observable state: ``effect_present`` true means the
+    write committed; if the page rendered (``page_loaded``) but the effect is absent
+    and the read source is authoritative, the write did not commit; otherwise the
+    outcome stays ambiguous. ``authoritative`` guards a false negative: when the read
+    source may lag the write (e.g. an eventually-consistent replica), an absent effect
+    is ambiguous, never a definite non-commit.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    read_route: str
+    page_loaded: Condition
+    effect_present: Condition
+    authoritative: bool = True

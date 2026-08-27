@@ -97,7 +97,7 @@ async def test_request_human_with_declining_handler_stops() -> None:
     lease = ControlLease()
     seen: dict[str, bool] = {"called": False}
 
-    async def decline(operator: OperatorController) -> bool:
+    async def decline(operator: OperatorController, reason: str | None = None) -> bool:
         seen["called"] = True
         return False
 

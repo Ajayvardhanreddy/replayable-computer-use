@@ -14,6 +14,10 @@ class TraceStep(BaseModel):
     risk: RiskClass
     value: ValueRef | None = None
     output: str | None = None
+    # The structural route pattern the action occurred on (a route_label, never a
+    # concrete path with a member id). Lets a later compiler reason about where an
+    # independent verification read happened without inspecting the live surface.
+    route: str | None = None
     # A stable landmark (e.g. a heading) observed after the action, used to
     # synthesize a deterministic postcondition.
     observed_landmark: str | None = None

@@ -1,0 +1,276 @@
+{
+  "schema_version": "1.0",
+  "id": "member.open_sub_account",
+  "version": 1,
+  "target": {
+    "vendor": "legacy_core",
+    "application_family": "core_banking"
+  },
+  "inputs": {
+    "member_number": {
+      "type": "string",
+      "required": true,
+      "sensitivity": "pii"
+    }
+  },
+  "outputs": {
+    "sub_account_status": {
+      "type": "string",
+      "sensitivity": "none",
+      "currency": null
+    }
+  },
+  "steps": [
+    {
+      "id": "step_1_type",
+      "action": {
+        "type": "type",
+        "value": {
+          "source": "parameter",
+          "name": "member_number"
+        }
+      },
+      "target": {
+        "role": "textbox",
+        "name": "Member Number",
+        "label": null,
+        "text": null,
+        "frame": "lc-workspace",
+        "table_cell": null,
+        "fallbacks": []
+      },
+      "risk": "read_only",
+      "postcondition": null,
+      "outcomes": [],
+      "output": null,
+      "read_back": null,
+      "verification": null
+    },
+    {
+      "id": "step_2_click",
+      "action": {
+        "type": "click"
+      },
+      "target": {
+        "role": "button",
+        "name": "Search",
+        "label": null,
+        "text": null,
+        "frame": "lc-workspace",
+        "table_cell": null,
+        "fallbacks": []
+      },
+      "risk": "read_only",
+      "postcondition": {
+        "text_present": null,
+        "heading": {
+          "role": "heading",
+          "name": "Member Profile"
+        },
+        "route_pattern": null,
+        "output_present": null,
+        "any_of": null
+      },
+      "outcomes": [],
+      "output": null,
+      "read_back": null,
+      "verification": null
+    },
+    {
+      "id": "step_3_click",
+      "action": {
+        "type": "click"
+      },
+      "target": {
+        "role": "link",
+        "name": "Open Sub-Account",
+        "label": null,
+        "text": null,
+        "frame": "lc-workspace",
+        "table_cell": null,
+        "fallbacks": []
+      },
+      "risk": "read_only",
+      "postcondition": {
+        "text_present": null,
+        "heading": {
+          "role": "heading",
+          "name": "Open Sub-Account"
+        },
+        "route_pattern": null,
+        "output_present": null,
+        "any_of": null
+      },
+      "outcomes": [],
+      "output": null,
+      "read_back": null,
+      "verification": null
+    },
+    {
+      "id": "step_4_click",
+      "action": {
+        "type": "click"
+      },
+      "target": {
+        "role": "button",
+        "name": "Create Account",
+        "label": null,
+        "text": null,
+        "frame": "lc-workspace",
+        "table_cell": null,
+        "fallbacks": []
+      },
+      "risk": "consequential_write",
+      "postcondition": {
+        "text_present": null,
+        "heading": {
+          "role": "heading",
+          "name": "Sub-account created"
+        },
+        "route_pattern": null,
+        "output_present": null,
+        "any_of": null
+      },
+      "outcomes": [],
+      "output": null,
+      "read_back": null,
+      "verification": {
+        "navigate": [
+          {
+            "id": "verify_nav_1_click",
+            "action": {
+              "type": "click"
+            },
+            "target": {
+              "role": "link",
+              "name": "Member Inquiry",
+              "label": null,
+              "text": null,
+              "frame": null,
+              "table_cell": null,
+              "fallbacks": []
+            },
+            "risk": "read_only",
+            "postcondition": {
+              "text_present": null,
+              "heading": {
+                "role": "heading",
+                "name": "Member Inquiry"
+              },
+              "route_pattern": null,
+              "output_present": null,
+              "any_of": null
+            },
+            "outcomes": [],
+            "output": null,
+            "read_back": null,
+            "verification": null
+          },
+          {
+            "id": "verify_nav_2_type",
+            "action": {
+              "type": "type",
+              "value": {
+                "source": "parameter",
+                "name": "member_number"
+              }
+            },
+            "target": {
+              "role": "textbox",
+              "name": "Member Number",
+              "label": null,
+              "text": null,
+              "frame": "lc-workspace",
+              "table_cell": null,
+              "fallbacks": []
+            },
+            "risk": "read_only",
+            "postcondition": null,
+            "outcomes": [],
+            "output": null,
+            "read_back": null,
+            "verification": null
+          },
+          {
+            "id": "verify_nav_3_click",
+            "action": {
+              "type": "click"
+            },
+            "target": {
+              "role": "button",
+              "name": "Search",
+              "label": null,
+              "text": null,
+              "frame": "lc-workspace",
+              "table_cell": null,
+              "fallbacks": []
+            },
+            "risk": "read_only",
+            "postcondition": {
+              "text_present": null,
+              "heading": {
+                "role": "heading",
+                "name": "Member Profile"
+              },
+              "route_pattern": null,
+              "output_present": null,
+              "any_of": null
+            },
+            "outcomes": [],
+            "output": null,
+            "read_back": null,
+            "verification": null
+          }
+        ],
+        "page": {
+          "text_present": null,
+          "heading": {
+            "role": "heading",
+            "name": "Member Profile"
+          },
+          "route_pattern": null,
+          "output_present": null,
+          "any_of": null
+        },
+        "effect_present": {
+          "text_present": "Share Savings Sub",
+          "heading": null,
+          "route_pattern": null,
+          "output_present": null,
+          "any_of": null
+        },
+        "extract": {
+          "id": "verify_extract",
+          "action": {
+            "type": "extract"
+          },
+          "target": {
+            "role": null,
+            "name": null,
+            "label": null,
+            "text": null,
+            "frame": "lc-workspace",
+            "table_cell": {
+              "row_contains": "Share Savings Sub",
+              "column_header": "Status"
+            },
+            "fallbacks": []
+          },
+          "risk": "read_only",
+          "postcondition": null,
+          "outcomes": [],
+          "output": "sub_account_status",
+          "read_back": null,
+          "verification": null
+        }
+      }
+    }
+  ],
+  "success_checkpoint": {
+    "text_present": null,
+    "heading": null,
+    "route_pattern": null,
+    "output_present": "sub_account_status",
+    "any_of": null
+  }
+}

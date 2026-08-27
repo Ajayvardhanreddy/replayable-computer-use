@@ -28,6 +28,10 @@ class FailureCode(StrEnum):
     CHECKPOINT_FAILED = "CHECKPOINT_FAILED"
     SURFACE_ERROR = "SURFACE_ERROR"
     POLICY_DENIED = "POLICY_DENIED"
+    # A consequential write was dispatched, its normal completion was lost, and an
+    # authoritative read-back proved the effect did not commit. This is an execution
+    # failure, distinct from an explicit application rejection (a BusinessOutcome).
+    MUTATION_NOT_COMMITTED = "MUTATION_NOT_COMMITTED"
 
 
 class PolicyDecision(BaseModel):

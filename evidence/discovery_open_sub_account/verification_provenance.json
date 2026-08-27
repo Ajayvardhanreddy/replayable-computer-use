@@ -1,0 +1,31 @@
+{
+  "capability": "member.open_sub_account",
+  "write_step": "step_4_click",
+  "write_from_discovery_step": 4,
+  "verification": [
+    {
+      "from_discovery_step": 5,
+      "action": "click",
+      "target": "link:Member Inquiry",
+      "value": null
+    },
+    {
+      "from_discovery_step": 6,
+      "action": "type",
+      "target": "textbox:Member Number",
+      "value": "<param:member_number>"
+    },
+    {
+      "from_discovery_step": 7,
+      "action": "click",
+      "target": "button:Search",
+      "value": null
+    },
+    {
+      "from_discovery_step": 8,
+      "action": "extract",
+      "target": "cell[Share Savings Sub/Status]",
+      "output": "sub_account_status"
+    }
+  ]
+}

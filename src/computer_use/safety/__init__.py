@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .authority import AuthorityPolicy
 from .confirmation import ConfirmationPolicy
 from .navigation import NavigationPolicy, route_label, route_matches
 from .policy import Policy
@@ -9,6 +10,7 @@ from .risk import RiskClassifier
 from .secrets import EnvSecretProvider, MissingSecret, SecretProvider
 
 __all__ = [
+    "AuthorityPolicy",
     "ConfirmationPolicy",
     "EnvSecretProvider",
     "MissingSecret",

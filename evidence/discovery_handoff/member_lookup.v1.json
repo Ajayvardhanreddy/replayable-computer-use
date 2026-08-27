@@ -1,0 +1,123 @@
+{
+  "schema_version": "1.0",
+  "id": "member.lookup_savings_balance",
+  "version": 1,
+  "target": {
+    "vendor": "legacy_core",
+    "application_family": "core_banking"
+  },
+  "inputs": {
+    "member_number": {
+      "type": "string",
+      "required": true,
+      "sensitivity": "pii"
+    }
+  },
+  "outputs": {
+    "savings_balance": {
+      "type": "decimal",
+      "sensitivity": "financial",
+      "currency": "USD"
+    }
+  },
+  "steps": [
+    {
+      "id": "step_1_type",
+      "action": {
+        "type": "type",
+        "value": {
+          "source": "parameter",
+          "name": "member_number"
+        }
+      },
+      "target": {
+        "role": "textbox",
+        "name": "Member Number",
+        "label": null,
+        "text": null,
+        "frame": "lc-workspace",
+        "table_cell": null,
+        "fallbacks": []
+      },
+      "risk": "read_only",
+      "postcondition": null,
+      "outcomes": [],
+      "output": null,
+      "read_back": null,
+      "verification": null
+    },
+    {
+      "id": "step_2_click",
+      "action": {
+        "type": "click"
+      },
+      "target": {
+        "role": "button",
+        "name": "Search",
+        "label": null,
+        "text": null,
+        "frame": "lc-workspace",
+        "table_cell": null,
+        "fallbacks": []
+      },
+      "risk": "read_only",
+      "postcondition": {
+        "text_present": null,
+        "heading": {
+          "role": "heading",
+          "name": "Identity Verification Required"
+        },
+        "route_pattern": null,
+        "output_present": null,
+        "any_of": null
+      },
+      "outcomes": [
+        {
+          "code": "MEMBER_NOT_FOUND",
+          "outcome_class": "business_outcome",
+          "detector": {
+            "text_present": "Member record not found",
+            "heading": null,
+            "route_pattern": null,
+            "output_present": null,
+            "any_of": null
+          }
+        }
+      ],
+      "output": null,
+      "read_back": null,
+      "verification": null
+    },
+    {
+      "id": "step_3_extract",
+      "action": {
+        "type": "extract"
+      },
+      "target": {
+        "role": null,
+        "name": null,
+        "label": null,
+        "text": null,
+        "frame": "lc-workspace",
+        "table_cell": {
+          "row_contains": "Share Savings",
+          "column_header": "Current Balance"
+        },
+        "fallbacks": []
+      },
+      "risk": "read_only",
+      "postcondition": null,
+      "outcomes": [],
+      "output": "savings_balance",
+      "read_back": null,
+      "verification": null
+    }
+  ],
+  "success_checkpoint": {
+    "text_present": null,
+    "heading": null,
+    "route_pattern": null,
+    "output_present": "savings_balance",
+    "any_of": null
+  }
+}
