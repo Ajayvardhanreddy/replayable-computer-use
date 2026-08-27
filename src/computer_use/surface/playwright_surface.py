@@ -479,6 +479,24 @@ class PlaywrightSurface:
     async def current_url(self) -> str:
         return self._pg().url
 
+    async def scope_urls(self) -> list[str]:
+        """Every real document URL in the session: the top page and each subframe.
+
+        The meaningful workspace runs inside an iframe, so an in-scope top page can host
+        an out-of-scope subframe; navigation scope is judged against all of them. Blank or
+        unnavigated frames (``about:blank``, ``about:srcdoc``) carry no origin to judge and
+        are skipped. The top page is always included, even if every frame is blank.
+        """
+        urls: list[str] = []
+        for frame in self._pg().frames:
+            url = frame.url
+            if not url or url.startswith("about:"):
+                continue
+            urls.append(url)
+        if not urls:
+            urls.append(self._pg().url)
+        return urls
+
     async def wait_settled(self) -> None:
         try:
             await self._pg().wait_for_load_state("networkidle")

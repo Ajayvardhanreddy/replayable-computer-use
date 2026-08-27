@@ -225,9 +225,11 @@ printf 'take\nsubmit c2=4729\nresume\n' | \
   -p member_number=12345 --out /tmp/d.json --evidence /tmp/d.jsonl
 ```
 
-Piping supplies the value inline (`submit c2=4729`) because a non-interactive stream has no
-terminal to leak to; interactively the same sensitive field is refused inline and read from a
-masked prompt instead. Either way the value is audited as `<redacted>`.
+The inline form (`submit c2=4729`, a synthetic value) is for automated, non-interactive
+regeneration only — a piped stream has no terminal for a masked prompt to read from. It is
+never the human workflow: interactively the same sensitive field is refused inline and read
+from a masked prompt, so a real credential is never placed in shell history. Either way the
+value is audited as `<redacted>`.
 
 ---
 

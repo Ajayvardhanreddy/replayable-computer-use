@@ -21,6 +21,7 @@ is in [`REPORT.md`](REPORT.md). Deeper design notes are in
 
 ```bash
 uv sync
+uv run playwright install chromium   # the browser the agent drives
 ```
 
 ## Run the tests

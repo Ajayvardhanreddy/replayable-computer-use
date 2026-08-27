@@ -1,2 +1,3 @@
-{"event":"control_transferred","run_id":"run_25d1931f","ts":"2026-08-26T18:12:43.588336Z","step_id":null,"attributes":{"from_owner":"automation","to_owner":"human","epoch":1,"operator_id":"local-operator","reason":"MUTATION_AMBIGUOUS"}}
-{"event":"control_transferred","run_id":"run_25d1931f","ts":"2026-08-26T18:12:50.121661Z","step_id":null,"attributes":{"from_owner":"human","to_owner":"automation","epoch":2,"operator_id":"local-operator","reason":null}}
+{"event":"control_transferred","run_id":"run_95451de8","ts":"2026-08-27T20:35:32.351981Z","step_id":null,"attributes":{"from_owner":"automation","to_owner":"human","epoch":1,"operator_id":"local-operator","reason":"MUTATION_AMBIGUOUS"}}
+{"event":"human_action","run_id":"run_95451de8","ts":"2026-08-27T20:35:36.698354Z","step_id":null,"attributes":{"epoch":1,"operator_id":"local-operator","action":"click","target":"link:Acknowledge","route":"/","value":null}}
+{"event":"control_transferred","run_id":"run_95451de8","ts":"2026-08-27T20:35:38.680194Z","step_id":null,"attributes":{"from_owner":"human","to_owner":"automation","epoch":2,"operator_id":"local-operator","reason":null}}

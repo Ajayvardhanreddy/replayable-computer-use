@@ -59,31 +59,67 @@ async def test_consequential_action_raises_typed_approval_required() -> None:
 
 
 async def test_matching_grant_dispatches_once() -> None:
+    # The grant must carry the nonce the kernel actually issued for this request, so the
+    # approval flows request -> grant on the same kernel rather than being fabricated.
     surface = _Surface()
-    resolved = TargetDescriptor(role="button", name="Create Account")
-    grant = ApprovalGrant(
-        proposal_nonce="n1",
-        fingerprint=fingerprint_of(ProposedActionType.CLICK, resolved, surface.heading, None),
-    )
-    execution = await _kernel(surface, interactive=True).execute(
-        _PROPOSAL, _CANDIDATES, approval=grant
-    )
+    kernel = _kernel(surface, interactive=True)
+    with pytest.raises(ApprovalRequired) as exc:
+        await kernel.execute(_PROPOSAL, _CANDIDATES)
+    request = exc.value.request
+    grant = ApprovalGrant(proposal_nonce=request.proposal_nonce, fingerprint=request.fingerprint)
+    execution = await kernel.execute(_PROPOSAL, _CANDIDATES, approval=grant)
     assert execution.risk is RiskClass.CONSEQUENTIAL_WRITE
     assert surface.clicks == 1
 
 
 async def test_stale_grant_is_refused_and_does_not_dispatch() -> None:
     surface = _Surface(heading="Open Sub-Account")
+    kernel = _kernel(surface, interactive=True)
+    with pytest.raises(ApprovalRequired) as exc:
+        await kernel.execute(_PROPOSAL, _CANDIDATES)
     resolved = TargetDescriptor(role="button", name="Create Account")
-    # The human approved against a different observable state (a different landmark).
+    # A validly-issued nonce, but the human approved against a different observable state.
     stale = ApprovalGrant(
-        proposal_nonce="n1",
+        proposal_nonce=exc.value.request.proposal_nonce,
         fingerprint=fingerprint_of(ProposedActionType.CLICK, resolved, "Some Other Page", None),
     )
-    with pytest.raises(KernelRejection) as exc:
-        await _kernel(surface, interactive=True).execute(_PROPOSAL, _CANDIDATES, approval=stale)
-    assert exc.value.code is RejectionCode.APPROVAL_STALE
+    with pytest.raises(KernelRejection) as rej:
+        await kernel.execute(_PROPOSAL, _CANDIDATES, approval=stale)
+    assert rej.value.code is RejectionCode.APPROVAL_STALE
     assert surface.clicks == 0
+
+
+async def test_unrecognized_nonce_is_refused() -> None:
+    # Correct fingerprint but a nonce this kernel never issued: a fabricated grant fails
+    # closed before dispatch, so the nonce is not decorative.
+    surface = _Surface()
+    kernel = _kernel(surface, interactive=True)
+    with pytest.raises(ApprovalRequired) as exc:
+        await kernel.execute(_PROPOSAL, _CANDIDATES)
+    forged = ApprovalGrant(
+        proposal_nonce="not-a-real-nonce", fingerprint=exc.value.request.fingerprint
+    )
+    with pytest.raises(KernelRejection) as rej:
+        await kernel.execute(_PROPOSAL, _CANDIDATES, approval=forged)
+    assert rej.value.code is RejectionCode.APPROVAL_INVALID
+    assert surface.clicks == 0
+
+
+async def test_grant_is_single_use() -> None:
+    # A grant authorizes exactly one consequential dispatch; replaying it (same operation,
+    # unchanged state, so the fingerprint still matches) is refused.
+    surface = _Surface()
+    kernel = _kernel(surface, interactive=True)
+    with pytest.raises(ApprovalRequired) as exc:
+        await kernel.execute(_PROPOSAL, _CANDIDATES)
+    request = exc.value.request
+    grant = ApprovalGrant(proposal_nonce=request.proposal_nonce, fingerprint=request.fingerprint)
+    await kernel.execute(_PROPOSAL, _CANDIDATES, approval=grant)
+    assert surface.clicks == 1
+    with pytest.raises(KernelRejection) as rej:
+        await kernel.execute(_PROPOSAL, _CANDIDATES, approval=grant)
+    assert rej.value.code is RejectionCode.APPROVAL_INVALID
+    assert surface.clicks == 1  # no second dispatch
 
 
 async def test_default_seam_off_is_terminal_confirmation_required() -> None:

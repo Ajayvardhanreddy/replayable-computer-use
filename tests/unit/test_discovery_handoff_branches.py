@@ -36,6 +36,9 @@ class _MiniSurface:
     async def current_url(self) -> str:
         return "http://legacy/"
 
+    async def scope_urls(self) -> list[str]:
+        return [await self.current_url()]
+
     async def current_route(self) -> str:
         return "/"
 

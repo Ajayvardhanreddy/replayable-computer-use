@@ -145,10 +145,10 @@ def _surface_failure(run_id: str, error: SurfaceError, step_id: str | None) -> F
 
 
 def _nav_denied(
-    run_id: str, nav_policy: NavigationPolicy, url: str, step_id: str | None
+    run_id: str, nav_policy: NavigationPolicy, urls: list[str], step_id: str | None
 ) -> Failure | None:
-    """A typed Failure if the URL is out of navigation scope, else None."""
-    decision = nav_policy.check(url)
+    """A typed Failure if any current frame URL is out of navigation scope, else None."""
+    decision = nav_policy.check_all(urls)
     if decision.effect is PolicyEffect.DENY:
         return Failure(
             run_id=run_id,
@@ -321,7 +321,7 @@ class ReplaySession:
         # Certainty telemetry for the most recent consequential mutation (exposed for
         # evidence at the persistence boundary; the session never imports observability).
         self.last_effect_state: EffectState = EffectState.NOT_DISPATCHED
-        self.last_read_back_attempted = False
+        self.last_verification_attempted = False
         self.last_effect_reason = ""
         self._pending_commit: Step | None = None
         # The single consequential write's verification recipe (if any) and the trusted
@@ -354,7 +354,7 @@ class ReplaySession:
             if self.owns_surface:
                 await self.surface.start()
             entry = self._target_url.rstrip("/") + "/"
-            denied = _nav_denied(self.run_id, self._nav_policy, entry, None)
+            denied = _nav_denied(self.run_id, self._nav_policy, [entry], None)
             if denied is not None:
                 return denied
             await self.surface.goto(entry)
@@ -403,14 +403,6 @@ class ReplaySession:
         for one capability's step cannot authorize another capability's same-named step."""
         return f"{self._capability.id}:v{self._capability.version}:{step.id}"
 
-    def _resolve_route(self, route_pattern: str) -> str:
-        """Concrete read-back URL: substitute :param segments from the invocation inputs."""
-        segments = [
-            self._inputs.get(seg[1:], seg) if seg.startswith(":") and len(seg) > 1 else seg
-            for seg in route_pattern.split("/")
-        ]
-        return self._target_url.rstrip("/") + "/".join(segments)
-
     def _commit_success(self) -> Success:
         return Success(
             run_id=self.run_id,
@@ -425,117 +417,6 @@ class ReplaySession:
         self.last_effect_reason = reason
         self._pending_commit = step
         return self._escalate(MUTATION_AMBIGUOUS, step)
-
-    async def _run_commit(self, step: Step) -> RunResult:
-        """Execute a consequential commit exactly once, then establish its effect.
-
-        The dispatch is not wrapped in transient retry: everything before the click is
-        pre-dispatch (a failure there is a normal, definitely-not-dispatched Failure);
-        once the click is invoked the effect may have happened, so an uncertain
-        completion is resolved by read-back, never by re-dispatching.
-        """
-        self.last_effect_state = EffectState.DISPATCHING
-        self.last_read_back_attempted = False
-        self.last_effect_reason = ""
-        try:
-            await self._kernel.execute_step(
-                step, epoch=self.lease.epoch, operation_id=self._operation_id(step)
-            )
-        except KernelRejection as rejection:
-            self.last_effect_state = EffectState.NOT_DISPATCHED
-            self.last_effect_reason = "not dispatched: authorization or resolution refused"
-            return Failure(
-                run_id=self.run_id,
-                code=_failure_code(rejection.code),
-                step_id=step.id,
-                observed=await _observe(self.surface, self._routes),
-                retryable=False,
-                model_calls=0,
-            )
-        except MutationDispatchUncertain:
-            self.last_effect_state = EffectState.DISPATCHED
-            return await self._verify_after_dispatch(step)
-        except SurfaceError as error:
-            self.last_effect_state = EffectState.NOT_DISPATCHED
-            return _surface_failure(self.run_id, error, step.id)
-        # Dispatch returned. Judge the completion signal on the current page.
-        self.last_effect_state = EffectState.DISPATCHED
-        try:
-            await self.surface.wait_settled()
-            denied = _nav_denied(
-                self.run_id, self._nav_policy, await self.surface.current_url(), step.id
-            )
-            if denied is not None:
-                return denied
-            kind, code = await self._resolve_commit_outcome(step)
-        except SurfaceError:
-            return await self._verify_after_dispatch(step)
-        if kind == "outcome":
-            self.last_effect_state = EffectState.NOT_COMMITTED
-            self.last_effect_reason = f"explicit application rejection: {code}"
-            return BusinessOutcome(
-                run_id=self.run_id, capability=self._capability.id, code=code or "", model_calls=0
-            )
-        if kind == "committed":
-            self.last_effect_state = EffectState.COMMITTED
-            self.last_effect_reason = "success confirmation observed"
-            return self._commit_success()
-        return await self._verify_after_dispatch(step)
-
-    async def _resolve_commit_outcome(self, step: Step) -> tuple[str, str | None]:
-        """Race explicit rejection outcomes against the success postcondition after a
-        commit dispatch. Returns ('outcome', code) | ('committed', None) | ('uncertain', None)."""
-        waited = 0
-        while True:
-            try:
-                for outcome in step.outcomes:
-                    if outcome.outcome_class is OutcomeClass.BUSINESS_OUTCOME and await _matches(
-                        self.surface, outcome.detector
-                    ):
-                        return ("outcome", outcome.code)
-                if step.postcondition is not None and await _matches(
-                    self.surface, step.postcondition
-                ):
-                    return ("committed", None)
-            except SurfaceTransientError:
-                pass
-            if waited >= self._resolve_timeout_ms:
-                return ("uncertain", None)
-            await asyncio.sleep(0.1)
-            waited += 100
-
-    async def _verify_after_dispatch(self, step: Step) -> RunResult:
-        """Establish a dispatched mutation's effect through an independent read path."""
-        self.last_read_back_attempted = True
-        read_back = step.read_back
-        assert read_back is not None
-        url = self._resolve_route(read_back.read_route)
-        if _nav_denied(self.run_id, self._nav_policy, url, step.id) is not None:
-            return self._mutation_ambiguous(step, "read-back route out of scope")
-        try:
-            await self.surface.goto(url)
-            await self.surface.wait_settled()
-            loaded = await _matches(self.surface, read_back.page_loaded)
-            present = await _matches(self.surface, read_back.effect_present)
-        except SurfaceError:
-            return self._mutation_ambiguous(step, "read-back could not load")
-        if present:
-            self.last_effect_state = EffectState.COMMITTED
-            self.last_effect_reason = "read-back: effect present"
-            return self._commit_success()
-        if loaded and read_back.authoritative:
-            # Absence is a definite non-commit only on an authoritative read source.
-            self.last_effect_state = EffectState.NOT_COMMITTED
-            self.last_effect_reason = "read-back: effect absent on authoritative read"
-            return Failure(
-                run_id=self.run_id,
-                code=FailureCode.MUTATION_NOT_COMMITTED,
-                step_id=step.id,
-                observed=await _observe(self.surface, self._routes),
-                retryable=False,
-                model_calls=0,
-            )
-        return self._mutation_ambiguous(step, "read-back: effect could not be established")
 
     async def _maybe_capture_baseline(self) -> None:
         """Record the effect's presence on its view before the write, for attribution."""
@@ -559,7 +440,7 @@ class ReplaySession:
         verification = step.verification
         assert verification is not None
         self.last_effect_state = EffectState.DISPATCHING
-        self.last_read_back_attempted = False
+        self.last_verification_attempted = False
         self.last_effect_reason = ""
         try:
             await self._kernel.execute_step(
@@ -617,7 +498,7 @@ class ReplaySession:
         transition. Declared outputs are read (and published) only once the effect is
         confirmed present, so a failed/ambiguous verification never leaks a result.
         """
-        self.last_read_back_attempted = True
+        self.last_verification_attempted = True
         try:
             for vstep in v.navigate:
                 if not await self._assert_read_only(vstep):
@@ -625,7 +506,7 @@ class ReplaySession:
                 await self._execute_step(vstep)
                 await self.surface.wait_settled()
                 denied = _nav_denied(
-                    self.run_id, self._nav_policy, await self.surface.current_url(), step.id
+                    self.run_id, self._nav_policy, await self.surface.scope_urls(), step.id
                 )
                 if denied is not None:
                     return self._mutation_ambiguous(step, "verification navigated out of scope")
@@ -686,10 +567,8 @@ class ReplaySession:
         step = self._pending_commit
         if step is None:
             return self._commit_success()
-        if step.verification is not None:
-            result: RunResult = await self._verify_embedded(step, step.verification)
-        else:
-            result = await self._verify_after_dispatch(step)
+        assert step.verification is not None
+        result: RunResult = await self._verify_embedded(step, step.verification)
         if isinstance(result, Escalated):
             return result
         self.pending = None
@@ -709,7 +588,7 @@ class ReplaySession:
                 step = steps[self._cursor]
                 await self.surface.wait_settled()
                 denied = _nav_denied(
-                    self.run_id, self._nav_policy, await self.surface.current_url(), step.id
+                    self.run_id, self._nav_policy, await self.surface.scope_urls(), step.id
                 )
                 if denied is not None:
                     return denied
@@ -719,13 +598,9 @@ class ReplaySession:
                 if await self.surface.has_blocking_dialog():
                     return self._escalate(UNKNOWN_DIALOG, step)
                 # A consequential write: dispatch once, then confirm the effect through
-                # its discovered independent verification rather than retrying. The
-                # embedded recipe is the current representation; read_back is the prior
-                # self-contained form still honored for existing artifacts.
+                # its discovered independent verification rather than retrying.
                 if step.verification is not None:
                     return await self._run_commit_verified(step)
-                if step.read_back is not None:
-                    return await self._run_commit(step)
                 try:
                     execution = await self._execute_step(step)
                     if step.output is not None and execution.extracted is not None:
@@ -736,7 +611,7 @@ class ReplaySession:
                     # before reading it for an outcome or checkpoint.
                     await self.surface.wait_settled()
                     post = _nav_denied(
-                        self.run_id, self._nav_policy, await self.surface.current_url(), step.id
+                        self.run_id, self._nav_policy, await self.surface.scope_urls(), step.id
                     )
                     if post is not None:
                         return post
@@ -751,9 +626,9 @@ class ReplaySession:
                         model_calls=0,
                     )
                 except MutationDispatchUncertain:
-                    # A consequential dispatch the artifact did not declare a read-back for:
-                    # the effect may have happened and cannot be verified here. Fail closed
-                    # to a human rather than retrying.
+                    # A consequential dispatch the artifact carried no verification recipe
+                    # for: the effect may have happened and cannot be verified here. Fail
+                    # closed to a human rather than retrying.
                     self.last_effect_state = EffectState.AMBIGUOUS
                     return self._escalate(MUTATION_AMBIGUOUS, step)
                 except SurfaceError as error:
@@ -788,7 +663,7 @@ class ReplaySession:
 
     async def _finish(self) -> RunResult:
         denied = _nav_denied(
-            self.run_id, self._nav_policy, await self.surface.current_url(), None
+            self.run_id, self._nav_policy, await self.surface.scope_urls(), None
         )
         if denied is not None:
             return denied
@@ -852,7 +727,7 @@ class ReplaySession:
         try:
             await self.surface.wait_settled()
             denied = _nav_denied(
-                self.run_id, self._nav_policy, await self.surface.current_url(), step.id
+                self.run_id, self._nav_policy, await self.surface.scope_urls(), step.id
             )
             if denied is not None:
                 self.pending = None

@@ -57,6 +57,7 @@ class RejectionCode(StrEnum):
     LOCATOR_AMBIGUOUS = "LOCATOR_AMBIGUOUS"
     RISK_CONFIRMATION_REQUIRED = "RISK_CONFIRMATION_REQUIRED"
     APPROVAL_STALE = "APPROVAL_STALE"
+    APPROVAL_INVALID = "APPROVAL_INVALID"
     UNKNOWN_PARAMETER = "UNKNOWN_PARAMETER"
     UNSUPPORTED_VALUE = "UNSUPPORTED_VALUE"
     SECRET_UNAVAILABLE = "SECRET_UNAVAILABLE"
@@ -166,6 +167,12 @@ class TrustedKernel:
         # at the expected epoch; otherwise every side effect fails closed. Absent a
         # lease the kernel behaves as an unguarded single-owner authority path.
         self._lease = lease
+        # One-time approval bookkeeping. A consequential proposal that needs human
+        # authorization is issued a fresh nonce; the returned grant is honored only if
+        # its nonce was issued here and not yet consumed. This makes a grant single-use:
+        # a fabricated or replayed grant fails closed before any dispatch.
+        self._issued_nonces: set[str] = set()
+        self._consumed_nonces: set[str] = set()
 
     async def execute(
         self,
@@ -317,19 +324,38 @@ class TrustedKernel:
         With a grant whose fingerprint no longer matches the live operation, the
         approval is stale (the page moved between request and grant) and dispatch is
         refused so orchestration re-observes. The kernel never prompts a human.
+
+        The grant is also single-use: its nonce must be one this kernel issued and has
+        not consumed, and it is consumed here on success, so it cannot be replayed.
         """
         landmark = await self._surface.primary_heading()
         current = fingerprint_of(action, resolved, landmark, epoch)
         if approval is None:
+            nonce = uuid4().hex
+            self._issued_nonces.add(nonce)
             raise ApprovalRequired(
-                ApprovalRequest(proposal_nonce=uuid4().hex, risk=RiskClass.CONSEQUENTIAL_WRITE,
+                ApprovalRequest(proposal_nonce=nonce, risk=RiskClass.CONSEQUENTIAL_WRITE,
                                 fingerprint=current)
+            )
+        # Single-use: the grant must carry a nonce this kernel issued and has not already
+        # consumed. This closes replay of a valid grant for a second dispatch of the same
+        # operation, which the fingerprint alone (unchanged state) would not catch.
+        if (
+            approval.proposal_nonce not in self._issued_nonces
+            or approval.proposal_nonce in self._consumed_nonces
+        ):
+            raise KernelRejection(
+                RejectionCode.APPROVAL_INVALID,
+                "approval grant is unrecognized or already used",
             )
         if approval.fingerprint != current:
             raise KernelRejection(
                 RejectionCode.APPROVAL_STALE,
                 "the operation or its observable state changed before authorization",
             )
+        # Consume at the authorization point, immediately before dispatch, so the grant
+        # cannot authorize a second consequential action.
+        self._consumed_nonces.add(approval.proposal_nonce)
 
     async def _resolve_target(self, target: TargetDescriptor) -> TargetDescriptor:
         """Resolve the primary then ordered fallbacks to a uniquely-matching descriptor.

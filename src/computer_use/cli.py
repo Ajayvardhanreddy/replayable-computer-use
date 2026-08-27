@@ -169,6 +169,21 @@ def _capability_b_spec(goal: str) -> GoalSpec:
         inputs={"member_number": InputSpec(type=ParamType.STRING, sensitivity=Sensitivity.PII)},
         outputs={"sub_account_status": OutputSpec(type=ParamType.STRING)},
         success_output="sub_account_status",
+        # Known application business semantics for the commit: attempting to open a
+        # sub-account that already exists is an explicit rejection, not a crash. Authored
+        # here at the composition root (app-specific knowledge) and bound by the compiler
+        # to the discovered commit step, mirroring Capability A's MEMBER_NOT_FOUND.
+        business_outcomes=[
+            OutcomeBinding(
+                action=ProposedActionType.CLICK,
+                target=TargetDescriptor(role="button", name="Create Account"),
+                outcome=Outcome(
+                    code="ACCOUNT_ALREADY_EXISTS",
+                    outcome_class=OutcomeClass.BUSINESS_OUTCOME,
+                    detector=Condition(text_present="A sub-account of this type already exists."),
+                ),
+            )
+        ],
     )
 
 
@@ -217,14 +232,9 @@ async def _discovery_approval_console(request: ApprovalRequest) -> ApprovalGrant
         target = f"{fp.target_role or 'element'}:{fp.target_name}"
     else:
         target = fp.target_role or "element"
-    typer.echo("")
-    typer.echo("=== Consequential action requires authorization ===")
-    typer.echo(f"  action:  {fp.action}")
-    typer.echo(f"  target:  {target}")
-    typer.echo(f"  risk:    {request.risk.value}")
-    if fp.landmark:
-        typer.echo(f"  context: {fp.landmark}")
-    typer.echo("The model cannot authorize this itself.")
+    operator_ui.render_approval_request(
+        action=fp.action, target=target, risk=request.risk.value, context=fp.landmark
+    )
     while True:
         try:
             answer = (await asyncio.to_thread(input, "approve this action? [y/N] ")).strip().lower()
@@ -234,7 +244,7 @@ async def _discovery_approval_console(request: ApprovalRequest) -> ApprovalGrant
             return ApprovalGrant(proposal_nonce=request.proposal_nonce, fingerprint=fp)
         if answer in ("", "n", "no"):
             return None
-        typer.echo("please answer y or n")
+        operator_ui.note("please answer y or n", style=operator_ui.WARN)
 
 
 def _target_fingerprint(target: TargetDescriptor | None) -> str:
@@ -355,14 +365,18 @@ async def _discovery_operator_console(
         command, _, rest = line.partition(" ")
         rest = rest.strip()
         if command == "take":
-            before, owner = owner, "HUMAN"
-            epoch = operator.take_control()
-            operator_ui.render_control_transfer(
-                before, owner, epoch, session_id=_session_label(surface)
-            )
-            operator_ui.render_human_mode()
-            displayed = await _show_controls(operator, surface)
-            operator_ui.render_commands()
+            try:
+                epoch = operator.take_control()
+            except OperatorError as error:
+                operator_ui.note(f"error: {error}", style=operator_ui.FAIL)
+            else:
+                before, owner = owner, "HUMAN"
+                operator_ui.render_control_transfer(
+                    before, owner, epoch, session_id=_session_label(surface)
+                )
+                operator_ui.render_human_mode()
+                displayed = await _show_controls(operator, surface)
+                operator_ui.render_commands()
         elif command in ("controls", "view"):
             displayed = await _show_controls(
                 operator, surface, full_page=rest in ("--all", "all")

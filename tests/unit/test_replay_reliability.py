@@ -129,6 +129,9 @@ class _FakeSurface:
     async def current_url(self) -> str:
         return "http://legacy/workspace/member/00000"
 
+    async def scope_urls(self) -> list[str]:
+        return [await self.current_url()]
+
     async def primary_heading(self) -> str | None:
         return self._heading
 

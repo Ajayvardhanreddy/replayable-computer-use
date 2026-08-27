@@ -40,7 +40,7 @@ _ALLOWED_ATTRIBUTES: dict[str, frozenset[str]] = {
     "human_action": frozenset({"epoch", "action", "target", "route", "value", "operator_id"}),
     "intervention_raised": frozenset({"reason", "model_call"}),
     "mutation_verified": frozenset(
-        {"step_id", "effect_state", "read_back_attempted", "reason"}
+        {"step_id", "effect_state", "verification_attempted", "reason"}
     ),
     "consequential_approval": frozenset(
         {"decision", "action", "target", "risk", "epoch", "model_call"}
@@ -212,11 +212,12 @@ def mutation_verified_event(
     run_id: str,
     step_id: str | None,
     effect_state: str,
-    read_back_attempted: bool,
+    verification_attempted: bool,
     reason: str,
 ) -> EvidenceEvent:
     """Records how a consequential mutation was resolved: the inferred effect state,
-    whether read-back was attempted, and a structural reason. No record values."""
+    whether independent verification was attempted, and a structural reason. No record
+    values."""
     return EvidenceEvent(
         event="mutation_verified",
         run_id=run_id,
@@ -225,7 +226,7 @@ def mutation_verified_event(
         attributes={
             "step_id": step_id,
             "effect_state": effect_state,
-            "read_back_attempted": read_back_attempted,
+            "verification_attempted": verification_attempted,
             "reason": reason,
         },
     )

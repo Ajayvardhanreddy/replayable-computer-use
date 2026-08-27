@@ -1,6 +1,6 @@
 {
-  "intervention_id": "int_b7a1d43b",
-  "run_id": "run_25d1931f",
+  "intervention_id": "int_c49615da",
+  "run_id": "run_95451de8",
   "capability": "member.open_sub_account",
   "version": 1,
   "step_id": "step_4_click",
@@ -21,5 +21,5 @@
     ],
     "screenshot": null
   },
-  "ts": "2026-08-26T18:12:33.556658Z"
+  "ts": "2026-08-27T20:35:21.498782Z"
 }

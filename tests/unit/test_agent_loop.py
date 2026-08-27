@@ -61,6 +61,9 @@ class _LoopSurface:
     async def current_url(self) -> str:
         return "http://localhost/workspace/inquiry"
 
+    async def scope_urls(self) -> list[str]:
+        return [await self.current_url()]
+
     async def primary_heading(self) -> str | None:
         return "Member Inquiry"
 

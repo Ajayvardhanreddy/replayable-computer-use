@@ -197,7 +197,7 @@ async def discover(
 
     for step_index in range(max_steps):
         await surface.wait_settled()
-        if nav_policy.check(await surface.current_url()).effect is PolicyEffect.DENY:
+        if nav_policy.check_all(await surface.scope_urls()).effect is PolicyEffect.DENY:
             stop_reason = "OUT_OF_SCOPE"
             break
         obs = await surface.observe()
@@ -353,7 +353,7 @@ async def discover(
             await surface.wait_settled()
             # A click may navigate; re-check scope before recording a landmark from
             # the resulting page into the trace/artifact.
-            if nav_policy.check(await surface.current_url()).effect is PolicyEffect.DENY:
+            if nav_policy.check_all(await surface.scope_urls()).effect is PolicyEffect.DENY:
                 stop_reason = "OUT_OF_SCOPE"
                 break
             # Record the heading only after it actually changes, so a slow navigation

@@ -13,7 +13,7 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .enums import OutcomeClass, ParamType, RiskClass, Sensitivity
-from .values import Condition, DerivedValue, ParameterRef, ReadBack, ValueRef
+from .values import Condition, DerivedValue, ParameterRef, ValueRef
 
 SCHEMA_VERSION = "1.0"
 
@@ -187,12 +187,9 @@ class Step(BaseModel):
     postcondition: Condition | None = None
     outcomes: list[Outcome] = Field(default_factory=list)
     output: str | None = None
-    # Present only on a consequential commit step: declares how the mutation's effect
-    # is verified through an independent read after an uncertain completion.
-    read_back: ReadBack | None = None
-    # The discovered, embedded independent-verification recipe for a consequential
-    # write (supersedes read_back). A single flat read-only sequence — never a nested
-    # workflow — that re-derives the effect's view and observes it.
+    # Present only on a consequential commit step: the discovered, embedded independent-
+    # verification recipe. A single flat read-only sequence — never a nested workflow —
+    # that re-derives the effect's view and observes it.
     verification: MutationVerification | None = None
 
     @field_validator("id")
@@ -223,26 +220,9 @@ class Step(BaseModel):
         # path, so the successful branch is explicit rather than implied.
         if self.outcomes and self.postcondition is None:
             raise ValueError("a step with outcomes must also have a normal-path postcondition")
-        if self.read_back is not None:
-            if not self.read_back.read_route.strip():
-                raise ValueError("read_back.read_route must be non-empty")
-            _forbid_matchers(
-                self.read_back.page_loaded,
-                _STEP_MATCHERS,
-                f"step {self.id!r} read_back.page_loaded",
-            )
-            _forbid_matchers(
-                self.read_back.effect_present,
-                _STEP_MATCHERS,
-                f"step {self.id!r} read_back.effect_present",
-            )
-        if self.verification is not None:
-            # A verification recipe belongs only on a consequential commit, and the two
-            # mutation representations are mutually exclusive.
-            if self.read_back is not None:
-                raise ValueError("a step cannot carry both read_back and verification")
-            if self.risk is RiskClass.READ_ONLY:
-                raise ValueError("verification is only valid on a consequential write step")
+        if self.verification is not None and self.risk is RiskClass.READ_ONLY:
+            # A verification recipe belongs only on a consequential commit step.
+            raise ValueError("verification is only valid on a consequential write step")
         return self
 
 
@@ -277,7 +257,7 @@ class MutationVerification(BaseModel):
         for member in recipe:
             if member.risk is not RiskClass.READ_ONLY:
                 raise ValueError("every verification step must be read_only")
-            if member.read_back is not None or member.verification is not None:
+            if member.verification is not None:
                 raise ValueError("a verification step cannot itself carry mutation metadata")
         if self.extract is not None and self.extract.action.type != "extract":
             raise ValueError("verification.extract must be an extract step")

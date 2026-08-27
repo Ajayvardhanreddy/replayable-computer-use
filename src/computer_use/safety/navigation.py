@@ -10,6 +10,7 @@ action, so an out-of-scope origin can never lead to another automated step.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -73,3 +74,19 @@ class NavigationPolicy:
         return PolicyDecision(
             effect=PolicyEffect.ALLOW, reason="in navigation scope", rule="navigation"
         )
+
+    def check_all(self, urls: Iterable[str]) -> PolicyDecision:
+        """Fail-closed across every frame URL the session occupies.
+
+        Denies on the first out-of-scope document, so an in-scope top page can never
+        mask an out-of-scope subframe. With no URLs to judge the session is not at any
+        out-of-scope origin, so it allows.
+        """
+        decision = PolicyDecision(
+            effect=PolicyEffect.ALLOW, reason="all frames in navigation scope", rule="navigation"
+        )
+        for url in urls:
+            decision = self.check(url)
+            if decision.effect is PolicyEffect.DENY:
+                return decision
+        return decision
