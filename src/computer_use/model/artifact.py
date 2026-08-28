@@ -439,3 +439,16 @@ class Capability(BaseModel):
                     f"success output {target_output!r} is never produced by an extract step"
                 )
         return self
+
+    @model_validator(mode="after")
+    def _single_final_verification(self) -> Self:
+        """A capability carries at most one consequential mutation-verification, and it must
+        be the final step. The runtime dispatches the write and returns after independent
+        verification, so a second verification step — or any step after it — would never
+        execute; rejecting that topology at load keeps the artifact contract closed."""
+        verified = [i for i, step in enumerate(self.steps) if step.verification is not None]
+        if len(verified) > 1:
+            raise ValueError("a capability may carry at most one mutation-verification step")
+        if verified and verified[0] != len(self.steps) - 1:
+            raise ValueError("a mutation-verification step must be the final step")
+        return self

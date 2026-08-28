@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from computer_use.execution import ApprovalRequest, KernelExecution
+from computer_use.execution import ApprovalRequest, KernelExecution, ReplayEvent
 from computer_use.model import (
     Capability,
     EvidenceEvent,
@@ -39,12 +39,13 @@ _ALLOWED_ATTRIBUTES: dict[str, frozenset[str]] = {
     ),
     "human_action": frozenset({"epoch", "action", "target", "route", "value", "operator_id"}),
     "intervention_raised": frozenset({"reason", "model_call"}),
-    "mutation_verified": frozenset(
-        {"step_id", "effect_state", "verification_attempted", "reason"}
-    ),
+    "mutation_verified": frozenset({"step_id", "effect_state"}),
     "consequential_approval": frozenset(
         {"decision", "action", "target", "risk", "epoch", "model_call"}
     ),
+    "replay_started": frozenset(),
+    "step_replayed": frozenset({"step_id", "action", "checkpoint_satisfied"}),
+    "replay_finished": frozenset({"result_kind", "model_calls"}),
 }
 
 
@@ -208,27 +209,31 @@ def intervention_raised_event(run_id: str, reason: str, model_call: int) -> Evid
     )
 
 
-def mutation_verified_event(
-    run_id: str,
-    step_id: str | None,
-    effect_state: str,
-    verification_attempted: bool,
-    reason: str,
-) -> EvidenceEvent:
-    """Records how a consequential mutation was resolved: the inferred effect state,
-    whether independent verification was attempted, and a structural reason. No record
-    values."""
+def replay_evidence_event(event: ReplayEvent) -> EvidenceEvent:
+    """Map a runtime replay event to a persisted evidence event: what started, which steps
+    executed and whether their checkpoints held, a mutation's verified effect state, and the
+    terminal result. Structural attributes only — the write-boundary allowlist drops anything
+    else. The runtime owns the facts; this layer owns persistence, so execution never couples
+    to JSONL."""
+    attributes: dict[str, str | int | bool | None] = {}
+    if event.step_id is not None:
+        attributes["step_id"] = event.step_id
+    if event.action_kind is not None:
+        attributes["action"] = event.action_kind
+    if event.checkpoint_satisfied is not None:
+        attributes["checkpoint_satisfied"] = event.checkpoint_satisfied
+    if event.effect_state is not None:
+        attributes["effect_state"] = event.effect_state
+    if event.result_kind is not None:
+        attributes["result_kind"] = event.result_kind
+    if event.model_calls is not None:
+        attributes["model_calls"] = event.model_calls
     return EvidenceEvent(
-        event="mutation_verified",
-        run_id=run_id,
+        event=event.kind,
+        run_id=event.run_id or "",
         ts=_now(),
-        step_id=step_id,
-        attributes={
-            "step_id": step_id,
-            "effect_state": effect_state,
-            "verification_attempted": verification_attempted,
-            "reason": reason,
-        },
+        step_id=event.step_id,
+        attributes=attributes,
     )
 
 

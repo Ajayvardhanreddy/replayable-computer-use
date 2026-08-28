@@ -29,6 +29,8 @@ from computer_use.execution import (
     ApprovalGrant,
     ApprovalRequest,
     ControlLease,
+    ReplayEvent,
+    ReplayEventSink,
     ReplaySession,
     TrustedKernel,
     ValueResolver,
@@ -69,6 +71,7 @@ from computer_use.observability import (
     EvidenceStore,
     FailureEvidence,
     persistable_result,
+    replay_evidence_event,
 )
 from computer_use.safety import (
     AuthorityPolicy,
@@ -546,10 +549,25 @@ class _ReplayReport:
     effect_reason: str
 
 
+def _replay_trace_sink(evidence_out: str) -> ReplayEventSink:
+    """Persistence adapter for replay events: the runtime emits structural facts, this writes
+    them (sanitized) to a per-run ``trace.jsonl`` beside the result. One clean run per trace —
+    an existing file is replaced, not appended to."""
+    trace_path = Path(evidence_out).parent / "trace.jsonl"
+    trace_path.unlink(missing_ok=True)
+    store = EvidenceStore(trace_path)
+
+    def sink(event: ReplayEvent) -> None:
+        store.write(replay_evidence_event(event))
+
+    return sink
+
+
 async def _run_replay(
     capability: Capability, params: dict[str, str], target: str, *,
     capability_name: str = "member_lookup", scenario: str = "normal",
     commit_timeout_ms: int | None = None, headed: bool = False,
+    on_event: ReplayEventSink | None = None,
 ) -> _ReplayReport:
     # The CLI drives the session directly (owning the Playwright seam) so that, on a
     # paused run, it can build a context-rich intervention while the surface is open.
@@ -566,11 +584,14 @@ async def _run_replay(
             nav_policy=profile.nav_policy, safe_clicks=profile.safe_clicks, surface=surface,
             secrets=EnvSecretProvider(), confirmation=_replay_confirmation(capability),
             authority=profile.authority, commit_timeout_ms=commit_timeout_ms,
+            on_event=on_event,
         )
         opened = await session.start()
         if opened is not None:
+            session.emit_replay_finished(opened)
             return _ReplayReport(opened, None, None, "")
         result = await session.advance()
+        session.emit_replay_finished(result)
         failure_evidence: FailureEvidence | None = None
         intervention: InterventionRequest | None = None
         if isinstance(result, Escalated):
@@ -615,10 +636,12 @@ def replay_command(
         # rejected before it can drive the browser.
         typer.echo(f"invalid capability artifact: {error}")
         raise typer.Exit(code=1) from error
+    on_event = _replay_trace_sink(evidence_out) if evidence_out is not None else None
     report = asyncio.run(
         _run_replay(
             loaded, _parse_params(param), target, capability_name=capability,
             scenario=scenario, commit_timeout_ms=commit_timeout_ms, headed=headed,
+            on_event=on_event,
         )
     )
     result = report.result

@@ -18,7 +18,7 @@ typed Failure. No raw driver exception crosses this boundary.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import uuid4
 
 from computer_use.model import (
@@ -68,6 +68,7 @@ from .kernel import (
     ValueResolver,
 )
 from .lease import ControlLease
+from .trace import ReplayEvent, ReplayEventSink
 
 # Stable reason codes (plain strings so the execution layer stays free of the handoff
 # layer; the operator surface maps them onto its typed InterventionReason). UNKNOWN_DIALOG
@@ -189,6 +190,20 @@ def _step_action(step: Step) -> ProposedActionType:
     return _ACTION_BY_TYPE[step.action.type]
 
 
+def _checkpoint_satisfied(step: Step, kind: str) -> bool | None:
+    """Whether the step's declared postcondition held: True/False when it has one, else None
+    (no postcondition, or the step resolved via a business outcome rather than its checkpoint).
+    ``_resolve_step`` returns ``continue`` when the checkpoint holds and ``failed`` when it does
+    not."""
+    if step.postcondition is None:
+        return None
+    if kind == "continue":
+        return True
+    if kind == "failed":
+        return False
+    return None
+
+
 async def _matches(surface: Surface, condition: Condition) -> bool:
     """Evaluate a live condition. Every set matcher is required (AND); ``any_of`` is
     an OR subgroup. Unsupported matchers raise rather than silently returning False."""
@@ -290,6 +305,7 @@ class ReplaySession:
         confirmation: ConfirmationPolicy | None = None,
         commit_timeout_ms: int | None = None,
         authority: AuthorityPolicy | None = None,
+        on_event: ReplayEventSink | None = None,
     ) -> None:
         self._capability = capability
         self._inputs = inputs
@@ -328,6 +344,24 @@ class ReplaySession:
         # pre-dispatch baseline: True/False once evaluated on the effect view, else None.
         self._commit_verification: MutationVerification | None = _sole_verification(capability)
         self._baseline_present: bool | None = None
+        self._on_event = on_event
+
+    def _emit(self, event: ReplayEvent) -> None:
+        """Emit a structural replay event to the optional sink, stamped with the run id.
+        A no-op when no sink is wired, so execution never depends on persistence."""
+        if self._on_event is not None:
+            self._on_event(replace(event, run_id=self.run_id))
+
+    def emit_replay_finished(self, result: RunResult) -> None:
+        """Emit the terminal replay event. Called by the run orchestrators (``run_to_completion``
+        and the CLI), which own the start/advance sequence, so the truth stays in the runtime."""
+        self._emit(
+            ReplayEvent(
+                kind="replay_finished",
+                result_kind=result.status,
+                model_calls=result.model_calls,
+            )
+        )
 
     @property
     def nav_policy(self) -> NavigationPolicy:
@@ -350,6 +384,7 @@ class ReplaySession:
         Returns a typed Failure if the entry is out of scope or the driver fails,
         else None (ready to advance).
         """
+        self._emit(ReplayEvent(kind="replay_started"))
         try:
             if self.owns_surface:
                 await self.surface.start()
@@ -542,6 +577,22 @@ class ReplaySession:
                         step, "effect present but its output could not be read"
                     )
             self.last_effect_state = EffectState.COMMITTED
+            # The write committed, but a Success still requires the capability's declared
+            # success checkpoint to hold on the verified state — no replay path returns
+            # Success on an unsatisfied checkpoint, the mutation path included.
+            if not await _success_satisfied(
+                self.surface, self._capability.success_checkpoint, self._outputs
+            ):
+                self.last_effect_reason = "verification: success checkpoint not satisfied"
+                return Failure(
+                    run_id=self.run_id,
+                    code=FailureCode.CHECKPOINT_FAILED,
+                    step_id=step.id,
+                    expected=repr(self._capability.success_checkpoint),
+                    observed=await _observe(self.surface, self._routes),
+                    retryable=False,
+                    model_calls=0,
+                )
             self.last_effect_reason = "verification: effect present"
             return self._commit_success()
         if self._baseline_present is False and self._authority.absence_is_authoritative():
@@ -600,7 +651,15 @@ class ReplaySession:
                 # A consequential write: dispatch once, then confirm the effect through
                 # its discovered independent verification rather than retrying.
                 if step.verification is not None:
-                    return await self._run_commit_verified(step)
+                    result = await self._run_commit_verified(step)
+                    self._emit(
+                        ReplayEvent(
+                            kind="mutation_verified",
+                            step_id=step.id,
+                            effect_state=self.last_effect_state.value,
+                        )
+                    )
+                    return result
                 try:
                     execution = await self._execute_step(step)
                     if step.output is not None and execution.extracted is not None:
@@ -634,6 +693,14 @@ class ReplaySession:
                 except SurfaceError as error:
                     # Driver failure, exhausted transient, or a mid-act target race.
                     return _surface_failure(self.run_id, error, step.id)
+                self._emit(
+                    ReplayEvent(
+                        kind="step_replayed",
+                        step_id=step.id,
+                        action_kind=step.action.type,
+                        checkpoint_satisfied=_checkpoint_satisfied(step, kind),
+                    )
+                )
                 if kind == "outcome":
                     return BusinessOutcome(
                         run_id=self.run_id,
@@ -784,8 +851,11 @@ class ReplaySession:
         an operator wired to take over, the intervention is reported and the run ends."""
         opened = await self.start()
         if opened is not None:
+            self.emit_replay_finished(opened)
             return opened
-        return await self.advance()
+        result = await self.advance()
+        self.emit_replay_finished(result)
+        return result
 
     async def close(self) -> None:
         if self.owns_surface:

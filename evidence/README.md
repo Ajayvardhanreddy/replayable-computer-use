@@ -6,6 +6,11 @@ evidence, consequential-write safety, and same-session human handoff. Every disc
 trace is a real Anthropic run (`claude-sonnet-4-6`). Exact commands to reproduce this whole
 set are in [`../HOW_TO_DEMO.md`](../HOW_TO_DEMO.md).
 
+Each `replay_*/` directory also contains a `trace.jsonl` — the runtime's own structural
+execution trace (which steps ran and whether their checkpoints held, a mutation's verified
+effect state, and the terminal result with `model_calls = 0`). It carries only structural
+identifiers and enums, never a raw value.
+
 **Safety, verified across the whole set:** no raw member id, financial value, or verification
 code appears in any file here; financial outputs are masked (`savings_balance = <financial>`);
 routes are recorded as structural patterns, not concrete PII paths; screenshots are

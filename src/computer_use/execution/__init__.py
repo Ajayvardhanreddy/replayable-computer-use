@@ -19,6 +19,7 @@ from .kernel import (
 from .lease import ControlLease, ControlLeaseError
 from .replay import replay
 from .session import InterventionSignal, ReplaySession
+from .trace import ReplayEvent, ReplayEventSink
 
 __all__ = [
     "ApprovalGrant",
@@ -32,6 +33,8 @@ __all__ = [
     "MutationDispatchUncertain",
     "OperationFingerprint",
     "RejectionCode",
+    "ReplayEvent",
+    "ReplayEventSink",
     "ReplaySession",
     "TrustedKernel",
     "ValueResolver",

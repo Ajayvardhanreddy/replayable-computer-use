@@ -1,15 +1,15 @@
 {
   "result": {
-    "run_id": "run_7bd3d1b3",
+    "run_id": "run_cc95c193",
     "model_calls": 0,
     "status": "escalated",
     "code": "MUTATION_AMBIGUOUS",
     "step_id": "step_4_click",
-    "intervention_id": "int_a368e631"
+    "intervention_id": "int_cc6a7375"
   },
   "intervention": {
-    "intervention_id": "int_a368e631",
-    "run_id": "run_7bd3d1b3",
+    "intervention_id": "int_cc6a7375",
+    "run_id": "run_cc95c193",
     "capability": "member.open_sub_account",
     "version": 1,
     "step_id": "step_4_click",
@@ -29,6 +29,6 @@
       ],
       "screenshot": null
     },
-    "ts": "2026-08-27T20:34:07.114063Z"
+    "ts": "2026-08-28T20:13:22.951568Z"
   }
 }

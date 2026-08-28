@@ -22,6 +22,7 @@ from computer_use.model import (
     Condition,
     ControlOwner,
     Escalated,
+    ExtractAction,
     Failure,
     FailureCode,
     Heading,
@@ -29,12 +30,14 @@ from computer_use.model import (
     MutationVerification,
     Outcome,
     OutcomeClass,
+    OutputSpec,
     ParameterRef,
     ParamType,
     RiskClass,
     Sensitivity,
     Step,
     Success,
+    TableCellTarget,
     TargetDescriptor,
     TypeAction,
 )
@@ -84,7 +87,7 @@ def _capability_b() -> Capability:
         version=1,
         target=CapabilityTarget(vendor="legacy_core", application_family="core_banking"),
         inputs={"member_number": InputSpec(type=ParamType.STRING, sensitivity=Sensitivity.PII)},
-        outputs={},
+        outputs={"sub_account_status": OutputSpec(type=ParamType.STRING)},
         steps=[
             Step(
                 id="s1_type",
@@ -151,10 +154,22 @@ def _capability_b() -> Capability:
                     ],
                     page=Condition(heading=Heading(role="heading", name="Member Profile")),
                     effect_present=Condition(text_present="Share Savings Sub"),
+                    extract=Step(
+                        id="v4_extract",
+                        action=ExtractAction(),
+                        target=TargetDescriptor(
+                            table_cell=TableCellTarget(
+                                row_contains="Share Savings Sub", column_header="Status"
+                            ),
+                            frame="lc-workspace",
+                        ),
+                        risk=RiskClass.READ_ONLY,
+                        output="sub_account_status",
+                    ),
                 ),
             ),
         ],
-        success_checkpoint=Condition(text_present="Sub-account created"),
+        success_checkpoint=Condition(output_present="sub_account_status"),
     )
 
 

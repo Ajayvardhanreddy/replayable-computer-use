@@ -1,0 +1,5 @@
+{"event":"replay_started","run_id":"run_093980e7","ts":"2026-08-28T20:13:11.243455Z","step_id":null,"attributes":{}}
+{"event":"step_replayed","run_id":"run_093980e7","ts":"2026-08-28T20:13:11.961289Z","step_id":"step_1_type","attributes":{"step_id":"step_1_type","action":"type"}}
+{"event":"step_replayed","run_id":"run_093980e7","ts":"2026-08-28T20:13:12.175910Z","step_id":"step_2_click","attributes":{"step_id":"step_2_click","action":"click","checkpoint_satisfied":true}}
+{"event":"step_replayed","run_id":"run_093980e7","ts":"2026-08-28T20:13:12.684056Z","step_id":"step_3_extract","attributes":{"step_id":"step_3_extract","action":"extract"}}
+{"event":"replay_finished","run_id":"run_093980e7","ts":"2026-08-28T20:13:12.684345Z","step_id":null,"attributes":{"result_kind":"success","model_calls":0}}
