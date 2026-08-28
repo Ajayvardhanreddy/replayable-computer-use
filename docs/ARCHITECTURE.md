@@ -146,9 +146,10 @@ Design choices:
   the trusted runtime resolves.
 - **Business outcomes are first-class** - "no such member" is an `Outcome`, not an error
   string.
-- **Action vocabulary** - the schema defines `click | type | select | extract`; the current
-  compiler emits, and the kernel executes, `click | type | extract` (a step with an
-  unexecutable action is refused, `NOT_EXECUTABLE`).
+- **Action vocabulary** - the schema's action union is broader (`observe`, `click`, `type`,
+  `select`, `scroll`, `extract`, `declare_success`, `request_human`); the current compiler
+  emits, and the kernel executes, the operating subset `click | type | extract` (a step with
+  an unexecutable action is refused, `NOT_EXECUTABLE`).
 - **Closed mutation topology** - validation rejects more than one verification step, or any
   step after it, so unsupported write shapes fail at load
   (`Capability._single_final_verification`).
@@ -320,7 +321,7 @@ detection. None exists.
 | Recovery | Bounded deterministic (transient retry, known interstitial) | Open-ended model fallback on failure | Keeps replay model-free and reviewable | Unmodeled states escalate rather than self-heal |
 | Evidence | Allowlisted structural, redact-before-persist | Rich raw screenshots/DOM | Regulated-data minimization by construction | Less pixel-level detail on failure |
 | Scope | One strong concrete surface | Many shallow adapters | Depth on the load-bearing seams | Only one surface proven end to end |
-| Architecture | Single process, synchronous | Queues/services up front | Simpler, correct, reviewable | Not horizontally scaled (by design) |
+| Architecture | Single process, async I/O | Queues/services up front | Simpler, correct, reviewable | Not horizontally scaled (by design) |
 
 ## Code and proof map
 

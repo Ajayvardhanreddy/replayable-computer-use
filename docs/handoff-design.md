@@ -94,7 +94,8 @@ Three invariants make this safe:
 - **Nothing sensitive is kept.** Evidence is allowlisted - action type, the control's
   structural identity, a route pattern, the ownership epoch, and redacted value metadata -
   never raw page text, record values, credentials, or secrets. A control name that could
-  itself carry record data is redacted by tenant policy.
+  itself carry record data would be redacted by a production tenant policy; that per-tenant
+  binding layer is designed, not implemented here.
 
 Two entry points reach this path: an unhandled blocking dialog during deterministic replay
 (`UNKNOWN_DIALOG`), and a live discovery model that judges it lacks a required credential
