@@ -1,0 +1,4 @@
+{"event":"replay_started","run_id":"run_6031b484","ts":"2026-08-28T20:13:13.347546Z","step_id":null,"attributes":{}}
+{"event":"step_replayed","run_id":"run_6031b484","ts":"2026-08-28T20:13:14.003099Z","step_id":"step_1_type","attributes":{"step_id":"step_1_type","action":"type"}}
+{"event":"step_replayed","run_id":"run_6031b484","ts":"2026-08-28T20:13:14.146307Z","step_id":"step_2_click","attributes":{"step_id":"step_2_click","action":"click"}}
+{"event":"replay_finished","run_id":"run_6031b484","ts":"2026-08-28T20:13:14.146519Z","step_id":null,"attributes":{"result_kind":"business_outcome","model_calls":0}}

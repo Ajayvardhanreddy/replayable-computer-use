@@ -1,0 +1,6 @@
+{"event":"replay_started","run_id":"run_cc95c193","ts":"2026-08-28T20:13:20.096557Z","step_id":null,"attributes":{}}
+{"event":"step_replayed","run_id":"run_cc95c193","ts":"2026-08-28T20:13:20.768883Z","step_id":"step_1_type","attributes":{"step_id":"step_1_type","action":"type"}}
+{"event":"step_replayed","run_id":"run_cc95c193","ts":"2026-08-28T20:13:20.959797Z","step_id":"step_2_click","attributes":{"step_id":"step_2_click","action":"click","checkpoint_satisfied":true}}
+{"event":"step_replayed","run_id":"run_cc95c193","ts":"2026-08-28T20:13:21.568520Z","step_id":"step_3_click","attributes":{"step_id":"step_3_click","action":"click","checkpoint_satisfied":true}}
+{"event":"mutation_verified","run_id":"run_cc95c193","ts":"2026-08-28T20:13:22.949736Z","step_id":"step_4_click","attributes":{"step_id":"step_4_click","effect_state":"ambiguous"}}
+{"event":"replay_finished","run_id":"run_cc95c193","ts":"2026-08-28T20:13:22.949935Z","step_id":null,"attributes":{"result_kind":"escalated","model_calls":0}}

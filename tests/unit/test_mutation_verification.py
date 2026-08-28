@@ -17,7 +17,7 @@ Human same-session re-verification (take over, resolve, hand back, resume) is an
 concern proven on the real ``ReplaySession`` + browser in ``tests/integration/test_mutation.py``.
 """
 
-from computer_use.execution import replay
+from computer_use.execution import ReplayEvent, replay
 from computer_use.model import (
     Capability,
     CapabilityTarget,
@@ -257,3 +257,58 @@ async def test_present_effect_without_absent_baseline_is_not_attributed() -> Non
     assert isinstance(result, Escalated)
     assert result.code == "MUTATION_AMBIGUOUS"
     assert fake.write_clicks == 1
+
+
+async def test_replay_emits_a_structural_execution_trace() -> None:
+    # The runtime emits a small ordered trace of what it actually executed — start, each
+    # step and whether its checkpoint held, the mutation's verified effect, and the terminal
+    # result — carrying only structural identifiers and enums, never a raw value.
+    events: list[ReplayEvent] = []
+    fake = _MutFake(baseline_present=False, effect_after=True)
+    result = await replay(
+        _capability(),
+        {},
+        "http://legacy",
+        nav_policy=_NAV,
+        safe_clicks=_SAFE,
+        surface=fake,
+        confirmation=_APPROVE,
+        resolve_timeout_ms=200,
+        on_event=events.append,
+    )
+    assert isinstance(result, Success)
+    kinds = [event.kind for event in events]
+    assert kinds[0] == "replay_started"
+    assert kinds[-1] == "replay_finished"
+    assert "step_replayed" in kinds  # the read-only navigation step executed
+    assert "mutation_verified" in kinds  # the consequential write was verified
+
+    finished = events[-1]
+    assert finished.result_kind == "success"
+    assert finished.model_calls == 0
+    verified = next(event for event in events if event.kind == "mutation_verified")
+    assert verified.step_id == "s2_create"
+    assert verified.effect_state == "committed"
+    searched = next(
+        event for event in events if event.kind == "step_replayed" and event.step_id == "s1_search"
+    )
+    assert searched.checkpoint_satisfied is True  # the step's postcondition was verified
+    for event in events:
+        assert event.run_id is not None
+        assert event.action_kind in (None, "click", "type", "extract")
+
+
+async def test_no_trace_events_without_a_sink() -> None:
+    # The emit path is a no-op when no sink is wired, so execution never depends on it.
+    fake = _MutFake(baseline_present=False, effect_after=True)
+    result = await replay(
+        _capability(),
+        {},
+        "http://legacy",
+        nav_policy=_NAV,
+        safe_clicks=_SAFE,
+        surface=fake,
+        confirmation=_APPROVE,
+        resolve_timeout_ms=200,
+    )
+    assert isinstance(result, Success)  # unchanged behavior with no sink

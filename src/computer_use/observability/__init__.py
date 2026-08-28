@@ -10,8 +10,8 @@ from .evidence import (
     discovery_started_event,
     human_action_event,
     intervention_raised_event,
-    mutation_verified_event,
     persistable_result,
+    replay_evidence_event,
     step_executed_event,
     step_rejected_event,
 )
@@ -34,8 +34,8 @@ __all__ = [
     "discovery_started_event",
     "human_action_event",
     "intervention_raised_event",
-    "mutation_verified_event",
     "persistable_result",
+    "replay_evidence_event",
     "step_executed_event",
     "step_rejected_event",
 ]

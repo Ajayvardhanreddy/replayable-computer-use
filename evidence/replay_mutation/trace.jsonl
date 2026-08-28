@@ -1,0 +1,6 @@
+{"event":"replay_started","run_id":"run_bc1af83c","ts":"2026-08-28T20:13:15.724086Z","step_id":null,"attributes":{}}
+{"event":"step_replayed","run_id":"run_bc1af83c","ts":"2026-08-28T20:13:16.399174Z","step_id":"step_1_type","attributes":{"step_id":"step_1_type","action":"type"}}
+{"event":"step_replayed","run_id":"run_bc1af83c","ts":"2026-08-28T20:13:16.600592Z","step_id":"step_2_click","attributes":{"step_id":"step_2_click","action":"click","checkpoint_satisfied":true}}
+{"event":"step_replayed","run_id":"run_bc1af83c","ts":"2026-08-28T20:13:17.200325Z","step_id":"step_3_click","attributes":{"step_id":"step_3_click","action":"click","checkpoint_satisfied":true}}
+{"event":"mutation_verified","run_id":"run_bc1af83c","ts":"2026-08-28T20:13:18.520590Z","step_id":"step_4_click","attributes":{"step_id":"step_4_click","effect_state":"committed"}}
+{"event":"replay_finished","run_id":"run_bc1af83c","ts":"2026-08-28T20:13:18.520896Z","step_id":null,"attributes":{"result_kind":"success","model_calls":0}}

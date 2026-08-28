@@ -297,7 +297,11 @@ class PlaywrightSurface:
 
     def _locator(self, frame: Frame, target: TargetDescriptor) -> Locator:
         if target.role and target.name:
-            return frame.locator(f'role={target.role}[name="{target.name}"]')
+            # Typed role/name lookup: the accessible name is page-derived text and must never
+            # be interpolated into selector syntax (a name with quotes/brackets would break or
+            # alter the selector). Exact match preserves unique-resolution and fail-closed
+            # ambiguity. `role` is a valid ARIA role string; cast to Playwright's role Literal.
+            return frame.get_by_role(cast(Any, target.role), name=target.name, exact=True)
         if target.label:
             return frame.get_by_label(target.label, exact=True)
         if target.text:

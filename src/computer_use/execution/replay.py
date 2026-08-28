@@ -18,6 +18,7 @@ from computer_use.safety import (
 from computer_use.surface import Surface
 
 from .session import _RESOLVE_TIMEOUT_MS, ReplaySession
+from .trace import ReplayEventSink
 
 
 async def replay(
@@ -33,6 +34,7 @@ async def replay(
     confirmation: ConfirmationPolicy | None = None,
     commit_timeout_ms: int | None = None,
     authority: AuthorityPolicy | None = None,
+    on_event: ReplayEventSink | None = None,
 ) -> RunResult:
     session = ReplaySession(
         capability,
@@ -46,6 +48,7 @@ async def replay(
         confirmation=confirmation,
         commit_timeout_ms=commit_timeout_ms,
         authority=authority,
+        on_event=on_event,
     )
     try:
         return await session.run_to_completion()

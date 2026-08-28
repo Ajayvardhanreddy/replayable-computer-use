@@ -16,6 +16,7 @@ from computer_use.model import (
     ExtractAction,
     Heading,
     InputSpec,
+    MutationVerification,
     Outcome,
     OutcomeClass,
     OutputSpec,
@@ -238,3 +239,54 @@ def test_output_present_is_not_a_step_matcher() -> None:
     )
     with pytest.raises(ValidationError, match="not accepted here"):
         _capability(steps=steps)
+
+
+def _write_step(step_id: str) -> Step:
+    """A consequential-write step carrying a minimal read-only verification recipe."""
+    return Step(
+        id=step_id,
+        action=ClickAction(),
+        target=TargetDescriptor(role="button", name="Commit"),
+        risk=RiskClass.CONSEQUENTIAL_WRITE,
+        postcondition=Condition(text_present="done"),
+        verification=MutationVerification(
+            navigate=[
+                Step(
+                    id=f"{step_id}_v",
+                    action=ClickAction(),
+                    target=TargetDescriptor(role="link", name="Records"),
+                    risk=RiskClass.READ_ONLY,
+                )
+            ],
+            page=Condition(heading=Heading(role="heading", name="Records")),
+            effect_present=Condition(text_present="Thing"),
+        ),
+    )
+
+
+def _write_capability(steps: list[Step]) -> Capability:
+    return Capability(
+        id="x.write",
+        version=1,
+        target=CapabilityTarget(vendor="v", application_family="f"),
+        inputs={},
+        outputs={},
+        steps=steps,
+        success_checkpoint=Condition(text_present="done"),
+    )
+
+
+def test_multiple_verification_steps_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="at most one mutation-verification"):
+        _write_capability([_write_step("w1"), _write_step("w2")])
+
+
+def test_step_after_verification_is_rejected() -> None:
+    trailing = Step(
+        id="after",
+        action=ClickAction(),
+        target=TargetDescriptor(role="button", name="Next"),
+        risk=RiskClass.READ_ONLY,
+    )
+    with pytest.raises(ValidationError, match="must be the final step"):
+        _write_capability([_write_step("w1"), trailing])
