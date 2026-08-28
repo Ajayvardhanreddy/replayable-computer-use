@@ -1,11 +1,11 @@
-# Human Handoff — Demo
+# Human Handoff - Demo
 
 Two runnable demos show a human taking over the exact live browser session and handing
 it back. They exercise the same control-transfer primitive from two directions:
 
-- **Replay-side** — deterministic replay (`model_calls = 0`) meets an unexpected modal it
+- **Replay-side** - deterministic replay (`model_calls = 0`) meets an unexpected modal it
   cannot classify, pauses, a human resolves it, and replay reconciles and completes.
-- **Discovery-side** — a live model discovers a workflow, reaches a state it cannot get
+- **Discovery-side** - a live model discovers a workflow, reaches a state it cannot get
   past, proposes escalation itself, a human resolves it, and the model continues.
 
 Add `--headed` to watch the Chromium window; the terminal output is identical either way.
@@ -23,7 +23,7 @@ automatically).
 
 ---
 
-## Demo A — Replay-side handoff (deterministic, model-free)
+## Demo A - Replay-side handoff (deterministic, model-free)
 
 ### Run it
 
@@ -31,7 +31,7 @@ automatically).
 uv run cua handoff-demo --headed          # terminal 2
 ```
 
-A window opens: automation types the member number, clicks Search, reaches the profile —
+A window opens: automation types the member number, clicks Search, reaches the profile -
 and a **"System Notice" modal blocks it**. Replay stops and prints a deterministic
 **Expected-vs-Observed** intervention (no model prose). At the `operator ❯` prompt, type:
 
@@ -60,10 +60,10 @@ resume         # reconcile and hand back; the run completes
 [AUTOMATION · epoch 0] operator ❯ take
   ● Control transferred   AUTOMATION → HUMAN   session sess_83018d74 preserved   epoch → 1
   ╭ HUMAN CONTROL ╮ You now control the same live session. Automation is fenced.
-  blocked by dialog "System Notice" — its controls:   c1   link   Acknowledge
+  blocked by dialog "System Notice" - its controls:   c1   link   Acknowledge
 [HUMAN · epoch 1] operator ❯ click c1
   ✓ recorded: click "Acknowledge"   (epoch 1)
-  blocker cleared — now at "Member Profile". Type 'resume' to hand back.
+  blocker cleared - now at "Member Profile". Type 'resume' to hand back.
 [HUMAN · epoch 1] operator ❯ resume
   ◌ Reconciling current application state…
   ✓ Control returned HUMAN → AUTOMATION (session sess_83018d74 preserved, epoch 2)
@@ -72,8 +72,8 @@ resume         # reconcile and hand back; the run completes
 ```
 
 The Chromium window stays open so you can watch the same session change as each command
-runs. Every operator action goes through the audited control path — `click c1` clicks the
-dialog's Acknowledge on that exact session and records it — so the human's activity is
+runs. Every operator action goes through the audited control path - `click c1` clicks the
+dialog's Acknowledge on that exact session and records it - so the human's activity is
 captured, not just observed. The intervention presents **deterministic facts** (what the
 artifact expected vs what the live surface shows), never a model-written explanation.
 
@@ -84,11 +84,11 @@ artifact expected vs what the live surface shows), never a model-written explana
   `role=dialog aria-modal` element), not a match on the notice text.
 - `take` flips the lease to `HUMAN (epoch 1)` and the trusted kernel **fences automation off**.
 - The **same session id** (`sess_…`) is shown at the intervention and marked *preserved* across
-  both transfers (epoch 0 → 1 → 2) — the same-live-session requirement made visible, using our
+  both transfers (epoch 0 → 1 → 2) - the same-live-session requirement made visible, using our
   own stable identifier, never a driver internal.
 - The human resolves it on the **same live session**; `resume` reconciles (the modal is gone
   and the "Member Profile" checkpoint still holds) and continues.
-- The run finishes `success`, `savings_balance: 8421.31`, **`model_calls: 0`** — the human
+- The run finishes `success`, `savings_balance: 8421.31`, **`model_calls: 0`** - the human
   intervention did not turn deterministic replay back into an agent.
 
 ### Evidence (`evidence/replay_handoff/`, sanitized)
@@ -106,7 +106,7 @@ balance is masked in the persisted file while the live result returns the real v
 
 ---
 
-## Demo B — Discovery-side handoff (live model)
+## Demo B - Discovery-side handoff (live model)
 
 ### Run it
 
@@ -118,7 +118,7 @@ uv run cua discover --headed --scenario verification_required \
 ```
 
 The window shows the live model type the member number, click Search, and reach an
-**"Identity Verification Required"** screen — a verification state for which it was not given
+**"Identity Verification Required"** screen - a verification state for which it was not given
 the required credential. The model **asks for a human itself**, and the panel shows the
 model's own reason plus the trusted structural observation. At the `operator ❯` prompt, type:
 
@@ -133,7 +133,7 @@ resume         # hand back; the model re-observes the unblocked page and continu
 ```
 ╭─────────── INTERVENTION REQUIRED  ·  discovery ───────────╮
   Capability   member.lookup_savings_balance v1
-  Step         —
+  Step         -
   Reason       HUMAN_REQUESTED
   Session      sess_cb7b3ccb
   Control      AUTOMATION      Epoch  0
@@ -145,7 +145,7 @@ resume         # hand back; the model re-observes the unblocked page and continu
   ● Control transferred   AUTOMATION → HUMAN   session sess_cb7b3ccb preserved   epoch → 1
   current actionable controls:   c1 link Member Inquiry    c2 textbox Employee Verification Code
 [HUMAN · epoch 1] operator ❯ submit c2
-  Employee Verification Code: ••••          (no-echo prompt — the value never appears)
+  Employee Verification Code: ••••          (no-echo prompt - the value never appears)
   ✓ recorded: submit "Employee Verification Code"   (epoch 1 · value redacted)
 [HUMAN · epoch 1] operator ❯ resume
   ● Control transferred   HUMAN → AUTOMATION   session sess_cb7b3ccb preserved   epoch → 2
@@ -153,7 +153,7 @@ resume         # hand back; the model re-observes the unblocked page and continu
 {"artifact": "evidence/discovery_handoff/member_lookup.v1.json", "model": "claude-sonnet-4-6", "model_calls": 6, "stop_reason": "GOAL_REACHED"}
 ```
 
-Because the code field is a **sensitive** field, its value is read from a no-echo prompt — it
+Because the code field is a **sensitive** field, its value is read from a no-echo prompt - it
 appears in neither the terminal transcript nor the evidence (audited as `<redacted>`). The panel
 shows the model's *own* `request_human` reason (clearly labelled as an agent request), never a
 generated paragraph; replay, by contrast, shows deterministic Expected-vs-Observed facts.
@@ -178,16 +178,16 @@ discovery_finished  {model_calls: 6, stop_reason: GOAL_REACHED}
 - This is a genuine live run (`claude-sonnet-4-6`, `model_calls: 6`).
 - The model tried to click through the verification state; the **trusted kernel refused it**
   (`RISK_CONFIRMATION_REQUIRED`). The model then **proposed `request_human` on its own** at
-  `model_call 4` — the escalation is the model's decision, from its normal action schema.
+  `model_call 4` - the escalation is the model's decision, from its normal action schema.
 - The human takes exclusive control (`epoch 1`) and enters the code on the **same live
   session**; the value is audited as `<redacted>`, never the raw code.
 - `resume` returns control to automation (`epoch 2`); discovery **re-observes** the now-
   unblocked page and the model continues to `GOAL_REACHED`. The resulting artifact is then
   handed to the same deterministic replay engine, which never calls a model.
-- The evidence contains no member id, balance, or code — only structural fingerprints,
+- The evidence contains no member id, balance, or code - only structural fingerprints,
   redacted values, and a monotonic epoch.
 
-### Sanity check — the escalation is not hard-coded
+### Sanity check - the escalation is not hard-coded
 
 The identical discovery flow against the **normal** account completes with no intervention:
 
@@ -226,7 +226,7 @@ printf 'take\nsubmit c2=4729\nresume\n' | \
 ```
 
 The inline form (`submit c2=4729`, a synthetic value) is for automated, non-interactive
-regeneration only — a piped stream has no terminal for a masked prompt to read from. It is
+regeneration only - a piped stream has no terminal for a masked prompt to read from. It is
 never the human workflow: interactively the same sensitive field is refused inline and read
 from a masked prompt, so a real credential is never placed in shell history. Either way the
 value is audited as `<redacted>`.
@@ -244,4 +244,4 @@ value is audited as `<redacted>`.
 | Audited human action, values redacted | `link:Acknowledge` | `value: <redacted>` |
 | Reconcile before resume (never `cursor + 1`) | checkpoint re-verified | re-observe → continue |
 | Completes after handback | `success`, `model_calls = 0` | `GOAL_REACHED` |
-| Escalation decided by the live model | — | ✅ |
+| Escalation decided by the live model | - | ✅ |

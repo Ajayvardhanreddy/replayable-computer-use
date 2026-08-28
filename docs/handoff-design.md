@@ -5,8 +5,8 @@
 Automation cannot always finish on its own. When it stops, the question is simple: does
 the human need to *answer something*, or *do something*?
 
-Most of the time the human just supplies one piece of information or makes one decision —
-a code, an approval, a choice — handled asynchronously, without anyone touching the
+Most of the time the human just supplies one piece of information or makes one decision -
+a code, an approval, a choice - handled asynchronously, without anyone touching the
 browser. Occasionally the state is one the automation cannot represent at all, and a human
 must operate the live session directly. That second case is the hard one, and it is what
 this repository implements end to end.
@@ -60,7 +60,7 @@ described here but not built (see Section 8).
 
 ## 3. What this repository implements
 
-This repository implements the hard path — `LIVE_TAKEOVER_REQUIRED` — end to end on one
+This repository implements the hard path - `LIVE_TAKEOVER_REQUIRED` - end to end on one
 live session:
 
 ```
@@ -86,8 +86,8 @@ Three invariants make this safe:
 - **Stale work cannot sneak back in.** Every handoff increments a counter (an *epoch*); an
   automation action created under an older epoch is rejected, so old queued work cannot
   regain control after a human has taken over.
-- **Nothing sensitive is kept.** Evidence is allowlisted — action type, the control's
-  structural identity, a route pattern, the ownership epoch, and redacted value metadata —
+- **Nothing sensitive is kept.** Evidence is allowlisted - action type, the control's
+  structural identity, a route pattern, the ownership epoch, and redacted value metadata -
   never raw page text, record values, credentials, or secrets. A control name that could
   itself carry record data is redacted by tenant policy.
 
@@ -119,10 +119,10 @@ process; in production the **browser gateway** enforces it on every command, so 
 stale worker on another machine cannot act on the session. The lease itself becomes a
 durable record with atomic ownership transfer (compare-and-set in the backing store) and
 heartbeats; if a human's hold expires, the session becomes explicitly unowned and must be
-reclaimed — never silently handed back to automation.
+reclaimed - never silently handed back to automation.
 
-Structured interventions need none of this lease machinery — a typed request and a typed
-answer through the same queue — which is why they are the production default: cheaper,
+Structured interventions need none of this lease machinery - a typed request and a typed
+answer through the same queue - which is why they are the production default: cheaper,
 safer with regulated data, and horizontally scalable.
 
 ## 5. Regulated data and audit
@@ -138,11 +138,11 @@ LIVE VIEW  (what the operator sees)      AUDIT  (what is kept)
   not recorded by default                  redacted values only
 ```
 
-- Access is brokered behind SSO/MFA and tenant RBAC — never a raw browser debug URL.
+- Access is brokered behind SSO/MFA and tenant RBAC - never a raw browser debug URL.
 - **Audit actions, not pixels:** the live view is not recorded by default; the durable
   record is structural.
 - Sensitive values are used transiently and never persisted.
-- Uncertainty fails closed — of owner, effect, observed state, entitlement, or evidence.
+- Uncertainty fails closed - of owner, effect, observed state, entitlement, or evidence.
 
 ## 6. Failure modes (all fail closed)
 
@@ -163,21 +163,21 @@ LIVE VIEW  (what the operator sees)      AUDIT  (what is kept)
 An intervention is evidence, not implicit training data. An approved capability is never
 changed because a human resolved a single run. Repeated interventions are grouped by the
 structural state that triggered them and by how they were resolved, and a *candidate*
-behavior is proposed — then typed, validated, reviewed, and promoted into a new capability
+behavior is proposed - then typed, validated, reviewed, and promoted into a new capability
 version. What is learned is the shape of the resolution, never a raw recorded action:
 
 - a harmless recurring dialog becomes a **recoverable** step (dismiss it), so replay handles
   it with no human;
-- a per-run credential becomes a structured `INPUT_REQUIRED` request — the runtime asks for a
+- a per-run credential becomes a structured `INPUT_REQUIRED` request - the runtime asks for a
   fresh value each time; the value itself is never stored, and no live takeover is needed;
 - an approval or judgment stays a human decision by policy;
 - a genuinely novel state keeps escalating until it is explicitly modeled.
 
 Discovery and replay differ in one way. During discovery the capability is still a draft, so
-a reviewed human resolution can become candidate knowledge for compilation — a production
+a reviewed human resolution can become candidate knowledge for compilation - a production
 extension, not current behavior: this repository does not compile operator actions into the
 artifact, and after handback discovery simply re-observes and continues. During replay the
-capability is approved, so a human action never mutates it — it becomes telemetry and a
+capability is approved, so a human action never mutates it - it becomes telemetry and a
 candidate patch for a reviewed new version.
 
 ```
@@ -199,7 +199,7 @@ escalating     (recover / input / approve / unknown)
                   deploy
 ```
 
-The goal is not zero human interventions — structured approvals and credentials remain human
+The goal is not zero human interventions - structured approvals and credentials remain human
 by design. The goal is that **live takeovers of the exact session trend toward zero** as
 recurring conditions become modeled behavior, without weakening review or safety.
 

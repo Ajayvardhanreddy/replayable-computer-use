@@ -1,7 +1,7 @@
 # How to run the demos
 
 One sentence: **a model figures out a task on a real bank UI, we save it as a reusable
-capability, and replay it later with no model — safely, and with a human able to step in.**
+capability, and replay it later with no model - safely, and with a human able to step in.**
 
 Three demos below. Run them in order. That's the whole thing.
 
@@ -9,16 +9,16 @@ Three demos below. Run them in order. That's the whole thing.
 
 ## Setup (do this once)
 
-**Terminal 1 — the target app (a synthetic bank workstation):**
+**Terminal 1 - the target app (a synthetic bank workstation):**
 ```bash
 uv run legacy-core
 ```
 
-**Terminal 2 — the commands below.**
+**Terminal 2 - the commands below.**
 
 - Discovery needs a model key: put `ANTHROPIC_API_KEY=...` in a local `.env` (git-ignored).
 - Replay needs **no key** (that's the point).
-- **Before each WRITE demo (3b, 3c, 3d), run `uv run cua reset-demo`** — it clears LegacyCore's
+- **Before each WRITE demo (3b, 3c, 3d), run `uv run cua reset-demo`** - it clears LegacyCore's
   in-memory state (leave the server running; no Ctrl-C needed). Skip it and a leftover account
   turns the next write demo into `ACCOUNT_ALREADY_EXISTS`.
 - Add `--headed` to any command to watch it in a real browser window. Leave it off to run invisibly.
@@ -27,9 +27,9 @@ uv run legacy-core
 
 ---
 
-## Demo 1 — Look up a member's balance (the core loop)
+## Demo 1 - Look up a member's balance (the core loop)
 
-**1a. Discover — watch the model drive the UI:**
+**1a. Discover - watch the model drive the UI:**
 ```bash
 uv run cua discover \
   --goal "Look up this member and return their savings balance" \
@@ -38,13 +38,13 @@ uv run cua discover \
   --evidence evidence/discovery/trace.jsonl --headed
 ```
 
-**1b. Replay for a DIFFERENT member — no model:**
+**1b. Replay for a DIFFERENT member - no model:**
 ```bash
 uv run cua replay evidence/capability/member_lookup.v1.json -p member_number=54321 --headed
 ```
 → returns the balance, `model_calls: 0`.
 
-**1c. Unknown member — a clean answer, not a crash:**
+**1c. Unknown member - a clean answer, not a crash:**
 ```bash
 uv run cua replay evidence/capability/member_lookup.v1.json -p member_number=99999
 ```
@@ -55,7 +55,7 @@ inputs → known outcomes are handled, not crashed.
 
 ---
 
-## Demo 2 — A locked account needs a human
+## Demo 2 - A locked account needs a human
 
 ```bash
 uv run cua discover \
@@ -70,41 +70,41 @@ take                                    # take the same live session; shows the 
 submit c2                               # the code field; the value is entered at a masked prompt, never typed inline
 resume                                  # hand control back; the model finishes
 ```
-You're running **headed**, so the live browser window is your visual context — you look at the real
+You're running **headed**, so the live browser window is your visual context - you look at the real
 page and decide. The terminal presents the state structurally and scopes controls to the blocker
 (with ids); nothing is pre-scripted. `inspect` re-reads the live state.
 
 **Shows:** when the model can't proceed, a human takes over the *same live session*, acts, and
-hands back — no restart, nothing lost.
+hands back - no restart, nothing lost.
 
-> ### On the human handoff — two different things, don't conflate them
+> ### On the human handoff - two different things, don't conflate them
 > - **Intervention *raised*** = the system detects it can't safely proceed and routes a
 >   context-carrying request; the *unattended* `cua replay` runner then **exits** with
 >   `escalated` + the case. This is only the **detect-and-route** half. → **Demo 3c**.
 > - **Handoff *completed*** = a human takes over the **same live session**, acts, and hands
->   control back, and the run resumes/finishes — the full loop
+>   control back, and the run resumes/finishes - the full loop
 >   `detect → route → pause → take same session → act → hand back → reconcile → resume`.
 >   Driven by `cua handoff-demo`. → **Demo 2** (locked account) and **Demo 3d** (mutation).
 >
 > **Canonical handoff demo = headed + interactive**: the reviewer *watches* the very same
 > Chromium session pass `automation → human → automation`, and the live browser window **is** the
-> human's visual surface — they look at the real dialog and decide what to do. The identical
-> control mechanism also runs **headless** — the operator drives it purely through the terminal,
+> human's visual surface - they look at the real dialog and decide what to do. The identical
+> control mechanism also runs **headless** - the operator drives it purely through the terminal,
 > which shows a deterministic **Expected vs Observed** panel and the **blocker's** controls by id
 > (the deterministic proof for CI):
 > ```bash
 > uv run cua handoff-demo --headless   # take -> click c1 -> resume  (c1 = the blocker's Acknowledge)
-> # same Page/BrowserContext, same ControlLease/epochs, same audited human action — no window
+> # same Page/BrowserContext, same ControlLease/epochs, same audited human action - no window
 > ```
 > The browser being *visible* is only so you can watch; it is not what makes it a handoff. What
 > makes it a handoff is the **control transfer over the same session** (the lease) + the human
-> **operating** it through the operator surface — both true headed or headless.
+> **operating** it through the operator surface - both true headed or headless.
 
 ---
 
-## Demo 3 — Open an account safely (the hard banking case)
+## Demo 3 - Open an account safely (the hard banking case)
 
-**3a. Discover — the model opens an account AND confirms it (you approve the one write):**
+**3a. Discover - the model opens an account AND confirms it (you approve the one write):**
 ```bash
 uv run cua discover --capability open_sub_account \
   --goal "Open a Share Savings sub-account for this member and report the new sub-account's status from their account list." \
@@ -114,7 +114,7 @@ uv run cua discover --capability open_sub_account \
 # when it asks:  approve this action? [y/N]  →  y
 ```
 
-**3b. Replay, different member — the write's reply is lost, but it verifies anyway:**
+**3b. Replay, different member - the write's reply is lost, but it verifies anyway:**
 *(run `uv run cua reset-demo` first)*
 ```bash
 uv run cua replay evidence/capability/open_sub_account.v1.json -p member_number=54321 \
@@ -123,7 +123,7 @@ uv run cua replay evidence/capability/open_sub_account.v1.json -p member_number=
 → dispatches the write **once**, the page hangs, it re-checks the accounts independently →
 `success`, no double-write.
 
-**3c. Replay — it can't verify, so it raises a full handoff case and stops:**
+**3c. Replay - it can't verify, so it raises a full handoff case and stops:**
 *(run `uv run cua reset-demo` first)*
 ```bash
 uv run cua replay evidence/capability/open_sub_account.v1.json -p member_number=54321 \
@@ -131,7 +131,7 @@ uv run cua replay evidence/capability/open_sub_account.v1.json -p member_number=
 ```
 → `escalated: MUTATION_AMBIGUOUS`, then it prints a **handoff case** for a human:
 ```
-=== Handoff case — a human needs to look into this ===
+=== Handoff case - a human needs to look into this ===
   case id:       int_...
   capability:    member.open_sub_account v1
   stopped at:    step step_4_click
@@ -141,11 +141,11 @@ uv run cua replay evidence/capability/open_sub_account.v1.json -p member_number=
   please:        confirm in the system of record whether the change took effect, then close this case.
 ```
 `cua replay` is the *unattended* runner: it does the write once, can't confirm it *here*, and hands
-off a **clear case with full context** — it never guesses. A human then resolves it **out of band**:
-retry the read, or check the **core banking system directly** — using access the boxed-in agent
+off a **clear case with full context** - it never guesses. A human then resolves it **out of band**:
+retry the read, or check the **core banking system directly** - using access the boxed-in agent
 doesn't have. (The *in-session* takeover, where a human fixes it live, is the next demo.)
 
-**3d. Handoff — blocked but fixable: a human takes over and it continues:**
+**3d. Handoff - blocked but fixable: a human takes over and it continues:**
 *(run `uv run cua reset-demo` first)*
 ```bash
 uv run cua handoff-demo evidence/capability/open_sub_account.v1.json -p member_number=54321 \
@@ -157,7 +157,7 @@ The verification read is blocked by a notice. At the `operator ❯` prompt:
 take       # take the same live session
 ```
 You're running **headed**, so the live browser is your visual context. The panel shows
-**Expected vs Observed** (deterministic, no prose) and the **blocker's** controls by id — then
+**Expected vs Observed** (deterministic, no prose) and the **blocker's** controls by id - then
 *you* decide (nothing is pre-scripted). `inspect` re-reads the live state; act by label or id:
 ```
 click c1              # c1 = the blocker's Acknowledge; or `click Acknowledge`
@@ -169,12 +169,12 @@ resume     # hand back; it re-checks (read-only) and finishes
 → `success`. The write is **never** re-clicked.
 
 **Shows:** a consequential write is dispatched exactly once; if the result is uncertain it
-verifies by an independent read; if it still can't tell, it stops or a human resolves it — never
+verifies by an independent read; if it still can't tell, it stops or a human resolves it - never
 a blind retry, never a false success.
 
 ---
 
-## Demo 4 — Deterministic scenarios (the app as an eval environment)
+## Demo 4 - Deterministic scenarios (the app as an eval environment)
 
 LegacyCore injects reproducible failure states with a `--scenario` switch; the model-free runtime
 (`model_calls: 0`) classifies each into a **typed** result. No model key needed.
@@ -196,8 +196,8 @@ Other scenarios used by the demos above: `slow`, `unexpected_dialog` (Demo 2),
 `verification_required` (discovery handoff), and the write family `commit_then_timeout`,
 `commit_ambiguous`, `commit_dropped`, `commit_unverifiable`, `verification_dialog` (Demo 3).
 
-**Shows:** the same generic runtime handles heterogeneous runtime errors — a business outcome, a
-typed failure with safe evidence, an escalation, or a same-session handoff — never a crash. The
+**Shows:** the same generic runtime handles heterogeneous runtime errors - a business outcome, a
+typed failure with safe evidence, an escalation, or a same-session handoff - never a crash. The
 full **scenario → outcome matrix** (12 rows, each with its test/evidence) is in
 [`docs/eval-scenarios.md`](docs/eval-scenarios.md).
 
