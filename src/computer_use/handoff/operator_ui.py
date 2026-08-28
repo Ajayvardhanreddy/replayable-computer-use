@@ -1,7 +1,7 @@
 """Presentation layer for the operator console — the human-handoff terminal.
 
 Renders the control-transfer state machine (automation ⇄ human, lease epochs,
-reconciliation, result) so a reviewer can *read* the handoff without reading source.
+reconciliation, result) so a human can *read* the handoff without reading source.
 
 This is presentation only. It depends on the public contract types
 (``InterventionRequest``, ``RunResult``) and never the other way round: execution,

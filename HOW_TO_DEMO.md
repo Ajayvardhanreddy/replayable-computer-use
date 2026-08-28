@@ -1,216 +1,225 @@
-# How to run the demos
+# Demo Guide
 
-One sentence: **a model figures out a task on a real bank UI, we save it as a reusable
-capability, and replay it later with no model - safely, and with a human able to step in.**
+Every runnable demo, with the exact command and what to watch for. The target is
+**LegacyCore**, the synthetic bank workstation (`uv run legacy-core`, on
+`http://localhost:8000`).
 
-Three demos below. Run them in order. That's the whole thing.
+- **Genuine discovery and the discovery-side handoff** (Demos 1 and 9) need
+  `ANTHROPIC_API_KEY` - a real model drives the UI.
+- **Deterministic replay and the replay-side handoff demos are keyless** - they run the
+  committed capabilities with no model in the loop (`model_calls = 0`).
+- Add **`--headed`** to watch the real Chromium window; without it, runs are invisible and
+  driven entirely from the terminal.
+- Run **`uv run cua reset-demo`** before re-running any *write* demo (it clears created
+  sub-accounts; leave the server up).
 
----
-
-## Setup (do this once)
-
-**Terminal 1 - the target app (a synthetic bank workstation):**
-```bash
-uv run legacy-core
-```
-
-**Terminal 2 - the commands below.**
-
-- Discovery needs a model key: put `ANTHROPIC_API_KEY=...` in a local `.env` (git-ignored).
-- Replay needs **no key** (that's the point).
-- **Before each WRITE demo (3b, 3c, 3d), run `uv run cua reset-demo`** - it clears LegacyCore's
-  in-memory state (leave the server running; no Ctrl-C needed). Skip it and a leftover account
-  turns the next write demo into `ACCOUNT_ALREADY_EXISTS`.
-- Add `--headed` to any command to watch it in a real browser window. Leave it off to run invisibly.
-- Each `discover` writes the capability into `evidence/capability/`; the `replay` steps read it
-  from there. So run a demo's `discover` step before its `replay` steps.
+Setup once: `uv sync && uv run playwright install chromium`.
 
 ---
 
-## Demo 1 - Look up a member's balance (the core loop)
+## Full demo catalog
 
-**1a. Discover - watch the model drive the UI:**
+### Demo 1 - Genuine discovery
+
+- **Demonstrates / why** - a real model completes the goal by driving the live UI; this is
+  the "discover once" half that everything else reuses.
+- **Requires** - LegacyCore; `ANTHROPIC_API_KEY`; `--headed` to watch.
+
 ```bash
+export ANTHROPIC_API_KEY=...
 uv run cua discover \
   --goal "Look up this member and return their savings balance" \
-  -p member_number=12345 \
-  --out evidence/capability/member_lookup.v1.json \
-  --evidence evidence/discovery/trace.jsonl --headed
+  --param member_number=12345 --target http://localhost:8000 --headed
 ```
 
-**1b. Replay for a DIFFERENT member - no model:**
-```bash
-uv run cua replay evidence/capability/member_lookup.v1.json -p member_number=54321 --headed
-```
-→ returns the balance, `model_calls: 0`.
+- **What you'll see** - the model types the member number, clicks Search, reads the balance,
+  and declares success; the terminal prints `{"artifact": "...", "model_calls": 4,
+  "stop_reason": "GOAL_REACHED"}`.
+- **Proves success** - `GOAL_REACHED`, a non-zero `model_calls`, and a written artifact.
+- **Evidence** - writes `evidence/capability/member_lookup.v1.json` and a sanitized
+  `evidence/discovery/trace.jsonl` (values recorded as `<param:member_number>`).
 
-**1c. Unknown member - a clean answer, not a crash:**
-```bash
-uv run cua replay evidence/capability/member_lookup.v1.json -p member_number=99999
-```
-→ `business_outcome: MEMBER_NOT_FOUND`.
+### Demo 2 - Keyless replay (the production path)
 
-**Shows:** the model discovers a task once → we save it → replay it deterministically with new
-inputs → known outcomes are handled, not crashed.
-
----
-
-## Demo 2 - A locked account needs a human
+- **Demonstrates / why** - the compiled capability re-runs for a *different* member with no
+  model; this is the path an agent would invoke in production.
+- **Requires** - LegacyCore. No key.
 
 ```bash
-uv run cua discover \
-  --goal "Look up this member and return their current savings balance" \
-  -p member_number=12345 --scenario verification_required \
-  --out evidence/discovery_handoff/member_lookup.v1.json \
-  --evidence evidence/discovery_handoff/trace.jsonl --headed
-```
-The model hits a locked account and **asks for a human**. At the `operator ❯` prompt:
-```
-take                                    # take the same live session; shows the blocker's controls
-submit c2                               # the code field; the value is entered at a masked prompt, never typed inline
-resume                                  # hand control back; the model finishes
-```
-You're running **headed**, so the live browser window is your visual context - you look at the real
-page and decide. The terminal presents the state structurally and scopes controls to the blocker
-(with ids); nothing is pre-scripted. `inspect` re-reads the live state.
-
-**Shows:** when the model can't proceed, a human takes over the *same live session*, acts, and
-hands back - no restart, nothing lost.
-
-> ### On the human handoff - two different things, don't conflate them
-> - **Intervention *raised*** = the system detects it can't safely proceed and routes a
->   context-carrying request; the *unattended* `cua replay` runner then **exits** with
->   `escalated` + the case. This is only the **detect-and-route** half. → **Demo 3c**.
-> - **Handoff *completed*** = a human takes over the **same live session**, acts, and hands
->   control back, and the run resumes/finishes - the full loop
->   `detect → route → pause → take same session → act → hand back → reconcile → resume`.
->   Driven by `cua handoff-demo`. → **Demo 2** (locked account) and **Demo 3d** (mutation).
->
-> **Canonical handoff demo = headed + interactive**: the reviewer *watches* the very same
-> Chromium session pass `automation → human → automation`, and the live browser window **is** the
-> human's visual surface - they look at the real dialog and decide what to do. The identical
-> control mechanism also runs **headless** - the operator drives it purely through the terminal,
-> which shows a deterministic **Expected vs Observed** panel and the **blocker's** controls by id
-> (the deterministic proof for CI):
-> ```bash
-> uv run cua handoff-demo --headless   # take -> click c1 -> resume  (c1 = the blocker's Acknowledge)
-> # same Page/BrowserContext, same ControlLease/epochs, same audited human action - no window
-> ```
-> The browser being *visible* is only so you can watch; it is not what makes it a handoff. What
-> makes it a handoff is the **control transfer over the same session** (the lease) + the human
-> **operating** it through the operator surface - both true headed or headless.
-
----
-
-## Demo 3 - Open an account safely (the hard banking case)
-
-**3a. Discover - the model opens an account AND confirms it (you approve the one write):**
-```bash
-uv run cua discover --capability open_sub_account \
-  --goal "Open a Share Savings sub-account for this member and report the new sub-account's status from their account list." \
-  -p member_number=12345 \
-  --out evidence/capability/open_sub_account.v1.json \
-  --evidence evidence/discovery_open_sub_account/trace.jsonl --headed
-# when it asks:  approve this action? [y/N]  →  y
+uv run cua replay evidence/capability/member_lookup.v1.json --param member_number=54321
 ```
 
-**3b. Replay, different member - the write's reply is lost, but it verifies anyway:**
-*(run `uv run cua reset-demo` first)*
-```bash
-uv run cua replay evidence/capability/open_sub_account.v1.json -p member_number=54321 \
-  --capability open_sub_account --scenario commit_then_timeout --commit-timeout-ms 300 --headed
-```
-→ dispatches the write **once**, the page hangs, it re-checks the accounts independently →
-`success`, no double-write.
+- **What you'll see** -
+  `{"status":"success", ..., "outputs":{"savings_balance":"312.45"}, "model_calls":0}`.
+- **Proves success** - `model_calls: 0`, a returned output, and an input different from the
+  one discovery used.
+- **Evidence** - `evidence/replay_success/` (`result.json` + `trace.jsonl`; the balance is
+  masked to `<financial>` in evidence, returned raw only on stdout).
 
-**3c. Replay - it can't verify, so it raises a full handoff case and stops:**
-*(run `uv run cua reset-demo` first)*
-```bash
-uv run cua replay evidence/capability/open_sub_account.v1.json -p member_number=54321 \
-  --capability open_sub_account --scenario commit_unverifiable --headed
-```
-→ `escalated: MUTATION_AMBIGUOUS`, then it prints a **handoff case** for a human:
-```
-=== Handoff case - a human needs to look into this ===
-  case id:       int_...
-  capability:    member.open_sub_account v1
-  stopped at:    step step_4_click
-  why:           MUTATION_AMBIGUOUS
-  what happened: verification: effect could not be established
-  what I did:    dispatched the write exactly once; did NOT retry it and did NOT assume success/failure.
-  please:        confirm in the system of record whether the change took effect, then close this case.
-```
-`cua replay` is the *unattended* runner: it does the write once, can't confirm it *here*, and hands
-off a **clear case with full context** - it never guesses. A human then resolves it **out of band**:
-retry the read, or check the **core banking system directly** - using access the boxed-in agent
-doesn't have. (The *in-session* takeover, where a human fixes it live, is the next demo.)
+### Demo 3 - Business outcome
 
-**3d. Handoff - blocked but fixable: a human takes over and it continues:**
-*(run `uv run cua reset-demo` first)*
-```bash
-uv run cua handoff-demo evidence/capability/open_sub_account.v1.json -p member_number=54321 \
-  --capability open_sub_account --scenario verification_dialog \
-  --evidence-out evidence/replay_mutation_handoff --headed
-```
-The verification read is blocked by a notice. At the `operator ❯` prompt:
-```
-take       # take the same live session
-```
-You're running **headed**, so the live browser is your visual context. The panel shows
-**Expected vs Observed** (deterministic, no prose) and the **blocker's** controls by id - then
-*you* decide (nothing is pre-scripted). `inspect` re-reads the live state; act by label or id:
-```
-click c1              # c1 = the blocker's Acknowledge; or `click Acknowledge`
-```
-then:
-```
-resume     # hand back; it re-checks (read-only) and finishes
-```
-→ `success`. The write is **never** re-clicked.
-
-**Shows:** a consequential write is dispatched exactly once; if the result is uncertain it
-verifies by an independent read; if it still can't tell, it stops or a human resolves it - never
-a blind retry, never a false success.
-
----
-
-## Demo 4 - Deterministic scenarios (the app as an eval environment)
-
-LegacyCore injects reproducible failure states with a `--scenario` switch; the model-free runtime
-(`model_calls: 0`) classifies each into a **typed** result. No model key needed.
+- **Demonstrates / why** - "no such member" is a legitimate result the caller needs, not a
+  crash - a correctness distinction the result contract deliberately preserves.
+- **Requires** - LegacyCore. No key.
 
 ```bash
-# Runtime errors → typed failures that name the observed state:
-uv run cua replay evidence/capability/member_lookup.v1.json -p member_number=54321 --scenario session_expired
+uv run cua replay evidence/capability/member_lookup.v1.json --param member_number=99999
+```
+
+- **What you'll see** -
+  `{"status":"business_outcome","code":"MEMBER_NOT_FOUND", ..., "model_calls":0}`.
+- **Proves success** - a typed `business_outcome` distinct from `failure`.
+- **Evidence** - `evidence/replay_business_outcome/`.
+
+### Demo 4 - Deterministic runtime scenarios
+
+- **Demonstrates / why** - injected runtime conditions map to typed results, not silent
+  proceed-anyway; the same model-free runtime classifies each.
+- **Requires** - LegacyCore. No key.
+
+```bash
+uv run cua replay evidence/capability/member_lookup.v1.json --param member_number=54321 --scenario session_expired
 #   → failure CHECKPOINT_FAILED, observed heading "Session Expired"
-
-uv run cua replay evidence/capability/member_lookup.v1.json -p member_number=54321 --scenario permission_denied
+uv run cua replay evidence/capability/member_lookup.v1.json --param member_number=54321 --scenario permission_denied
 #   → failure CHECKPOINT_FAILED, observed heading "Access Denied"
-
-# A legitimate domain answer, not a crash (even with a valid id):
-uv run cua replay evidence/capability/member_lookup.v1.json -p member_number=54321 --scenario not_found
+uv run cua replay evidence/capability/member_lookup.v1.json --param member_number=54321 --scenario not_found
 #   → business_outcome MEMBER_NOT_FOUND
 ```
 
-Other scenarios used by the demos above: `slow`, `unexpected_dialog` (Demo 2),
-`verification_required` (discovery handoff), and the write family `commit_then_timeout`,
-`commit_ambiguous`, `commit_dropped`, `commit_unverifiable`, `verification_dialog` (Demo 3).
+- **Proves success** - a hard failure carries `expected` vs `observed` (sanitized); a
+  business outcome stays a business outcome.
+- **Reference** - the full 12-row matrix is in [`docs/eval-scenarios.md`](docs/eval-scenarios.md).
 
-**Shows:** the same generic runtime handles heterogeneous runtime errors - a business outcome, a
-typed failure with safe evidence, an escalation, or a same-session handoff - never a crash. The
-full **scenario → outcome matrix** (12 rows, each with its test/evidence) is in
-[`docs/eval-scenarios.md`](docs/eval-scenarios.md).
+### Demo 5 - Consequential write, verified under a lost response
+
+- **Demonstrates / why** - the write is dispatched **exactly once**; its response is lost,
+  and an independent read-only re-derivation confirms the effect committed. Timeout ≠ failure,
+  and an uncertain write is never blindly retried.
+- **Requires** - LegacyCore; **`reset-demo` first**. No key.
+
+```bash
+uv run cua reset-demo
+uv run cua replay evidence/capability/open_sub_account.v1.json --param member_number=54321 \
+  --capability open_sub_account --scenario commit_then_timeout --commit-timeout-ms 300 --headed
+```
+
+- **What you'll see** -
+  `{"status":"success", ..., "outputs":{"sub_account_status":"OPEN"}, "model_calls":0}`; in
+  headed mode the write page hangs, then the runtime re-checks the member's accounts.
+- **Proves success** - `success` reached via independent verification, not via the commit
+  echo; the commit dispatched once (no double-write).
+- **Evidence** - `evidence/replay_mutation/`.
+
+### Demo 6 - Consequential write, unverifiable → escalate
+
+- **Demonstrates / why** - when the effect cannot be established, the runtime **never
+  guesses**: it stops and hands off a full case.
+- **Requires** - LegacyCore; **`reset-demo` first**. No key.
+
+```bash
+uv run cua reset-demo
+uv run cua replay evidence/capability/open_sub_account.v1.json --param member_number=54321 \
+  --capability open_sub_account --scenario commit_unverifiable --headed
+```
+
+- **What you'll see** - `{"status":"escalated","code":"MUTATION_AMBIGUOUS", ...}` followed by
+  a rendered **handoff case** (capability, step, why, what-I-did, what-to-do).
+- **Proves success** - `MUTATION_AMBIGUOUS` rather than a false `success`/`failure`; the
+  unattended runner routes a clear case and stops.
+- **Evidence** - `evidence/replay_mutation_ambiguous/`.
+
+### Demo 7 - Same-session replay handoff
+
+- **Demonstrates / why** - replay meets a dialog it cannot classify, pauses, and a human
+  resolves it on the **same live session** before automation reconciles and finishes.
+- **Requires** - LegacyCore. No key. Interactive; `--headed` to watch.
+
+```bash
+uv run cua handoff-demo --headed
+```
+
+At the `operator ❯` prompt:
+
+```
+take        # take exclusive control of the same live session (AUTOMATION → HUMAN, epoch → 1)
+click c1    # c1 = the blocker's "Acknowledge" (or: click Acknowledge)
+resume      # hand back (HUMAN → AUTOMATION, epoch → 2); the runtime reconciles and finishes
+```
+
+- **What you'll see** - an `INTERVENTION REQUIRED` panel (reason `UNKNOWN_DIALOG`, an
+  Expected-vs-Observed view, controls by id), then `SUCCESS` with `model_calls: 0` after
+  handback; the browser stays the *same* window throughout.
+- **Proves success** - `AUTOMATION → HUMAN → AUTOMATION` on one session, a recorded human
+  action, and a resumed `success`.
+- **Evidence** - `evidence/replay_handoff/` (`intervention.json`, `actions.jsonl`,
+  `result.json`).
+
+### Demo 8 - Same-session mutation handoff
+
+- **Demonstrates / why** - a write commits, but the verification read is blocked; a human
+  clears it and resumes, and automation re-runs **only the read-only verification** - the
+  write is never re-dispatched.
+- **Requires** - LegacyCore; **`reset-demo` first**. No key. Interactive.
+
+```bash
+uv run cua reset-demo
+uv run cua handoff-demo evidence/capability/open_sub_account.v1.json --param member_number=54321 \
+  --capability open_sub_account --scenario verification_dialog --headed
+#   operator ❯ take → click c1 → resume
+```
+
+- **Proves success** - `MUTATION_AMBIGUOUS` intervention → takeover → `SUCCESS`
+  (`sub_account_status: OPEN`) with the commit dispatched exactly once.
+- **Evidence** - `evidence/replay_mutation_handoff/`.
+
+### Demo 9 - Discovery-side handoff
+
+- **Demonstrates / why** - a live discovery model, refused a consequential step, asks for a
+  human itself; the human acts on the same session and the model resumes.
+- **Requires** - LegacyCore; `ANTHROPIC_API_KEY`. Interactive; `--headed` to watch.
+
+```bash
+uv run cua discover --headed --scenario verification_required \
+  --goal "Look up this member and return their savings balance" \
+  --param member_number=12345
+```
+
+At the `operator ❯` prompt:
+
+```
+take        # take the same live session
+submit c2   # c2 = the Employee Verification Code field; the value is entered at a masked
+            # prompt, never typed inline, and audited as <redacted>
+resume      # hand back; the model re-observes and finishes (GOAL_REACHED)
+```
+
+- **Proves success** - the model's own `request_human` (labelled "Agent request"), a masked
+  human action, `AUTOMATION → HUMAN → AUTOMATION`, and `GOAL_REACHED` on resume.
+- **Evidence** - `evidence/discovery_handoff/`. A deeper annotated walkthrough is in
+  [`docs/demo-handoff.md`](docs/demo-handoff.md).
 
 ---
 
-## What each demo proves (one line each)
+## Intervention *raised* ≠ handoff *completed*
 
-| Demo | Proves |
-|---|---|
-| 1 | discovery → saved capability → deterministic replay + business outcomes |
-| 2 | same-session human takeover |
-| 3 | safe consequential writes: dispatch-once, independent verification, escalate-or-recover |
-| 4 | deterministic eval scenarios: heterogeneous runtime errors → typed outcomes + safe evidence |
+Two different things, easy to conflate:
 
-That covers the whole submission: a goal, a genuine model run on a real UI, a saved capability,
-deterministic replay with inputs/outputs/errors, and a human able to take the live session.
+- **Intervention raised** - the system detects it cannot safely proceed and routes a
+  context-carrying request; the *unattended* `cua replay` runner then **exits** with
+  `escalated` + the case (Demo 6). This is the detect-and-route half.
+- **Handoff completed** - a human takes over the **same live session**, acts, and hands
+  control back, and the run resumes/finishes (Demos 7, 8, 9), driven by `cua handoff-demo`
+  (or interactive `discover`).
+
+The visible browser is only so you can watch; what makes it a handoff is the control transfer
+over the same session (the `ControlLease` + epochs) plus the human operating it.
+
+## Troubleshooting
+
+- **`connection refused` / blank page** - LegacyCore isn't running; start `uv run legacy-core`
+  and confirm `http://localhost:8000` loads.
+- **A write demo returns `ACCOUNT_ALREADY_EXISTS`** - the sub-account already exists from a
+  prior run; run `uv run cua reset-demo` and retry.
+- **`ANTHROPIC_API_KEY is not set`** - only discovery (Demos 1, 9) needs a key; replay and
+  handoff demos do not.
+- **Chromium fails to launch** - run `uv run playwright install chromium` once.

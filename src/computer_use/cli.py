@@ -279,7 +279,7 @@ def _write_verification_provenance(
     artifact: Capability, trace: DiscoveryTrace, spec: GoalSpec, evidence_dir: Path
 ) -> None:
     """Record which discovery steps became the embedded verification (structural only),
-    so a reviewer can see the model discovered the re-derivation, not the compiler."""
+    so it is visible that the model discovered the re-derivation, not the compiler."""
     prov = verification_provenance(trace, spec)
     write_step = next((s for s in artifact.steps if s.verification is not None), None)
     if prov is None or write_step is None or write_step.verification is None:
@@ -531,7 +531,7 @@ def _replay_profile(name: str) -> _ReplayProfile:
 def _replay_confirmation(capability: Capability) -> ConfirmationPolicy:
     """Operator sanction for a write replay: approve exactly the capability's own
     consequential operation. The model can never produce this; the operator does, by
-    running the command against this reviewed artifact."""
+    running the command against this approved artifact."""
     approved = frozenset(
         f"{capability.id}:v{capability.version}:{step.id}"
         for step in capability.steps
@@ -952,8 +952,8 @@ async def _operator_type(
 
 
 def _session_label(surface: PlaywrightSurface) -> str:
-    """Our own stable session id (not a driver internal), shown so the reviewer can see the same
-    live session persist across the human takeover."""
+    """Our own stable session id (not a driver internal), shown so the same
+    live session is visible as it persists across the human takeover."""
     return f"sess_{surface.session_id[:8]}"
 
 
