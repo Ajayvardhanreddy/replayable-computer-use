@@ -1,5 +1,10 @@
 # Human Intervention Design
 
+> **Scope:** the design and semantics of same-session control transfer - detection,
+> intervention context, the `ControlLease`/epoch ownership model, and reconcile-before-resume.
+> For the runnable commands see [`../HOW_TO_DEMO.md`](../HOW_TO_DEMO.md); for how this fits the
+> whole system see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 ## 1. The idea
 
 Automation cannot always finish on its own. When it stops, the question is simple: does
@@ -163,7 +168,7 @@ LIVE VIEW  (what the operator sees)      AUDIT  (what is kept)
 An intervention is evidence, not implicit training data. An approved capability is never
 changed because a human resolved a single run. Repeated interventions are grouped by the
 structural state that triggered them and by how they were resolved, and a *candidate*
-behavior is proposed - then typed, validated, reviewed, and promoted into a new capability
+behavior is proposed - then typed, validated, approved, and promoted into a new capability
 version. What is learned is the shape of the resolution, never a raw recorded action:
 
 - a harmless recurring dialog becomes a **recoverable** step (dismiss it), so replay handles
@@ -174,11 +179,11 @@ version. What is learned is the shape of the resolution, never a raw recorded ac
 - a genuinely novel state keeps escalating until it is explicitly modeled.
 
 Discovery and replay differ in one way. During discovery the capability is still a draft, so
-a reviewed human resolution can become candidate knowledge for compilation - a production
+an approved human resolution can become candidate knowledge for compilation - a production
 extension, not current behavior: this repository does not compile operator actions into the
 artifact, and after handback discovery simply re-observes and continues. During replay the
 capability is approved, so a human action never mutates it - it becomes telemetry and a
-candidate patch for a reviewed new version.
+candidate patch for an approved new version.
 
 ```
 human resolves an intervention

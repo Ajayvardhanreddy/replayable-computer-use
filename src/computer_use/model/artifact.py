@@ -1,6 +1,6 @@
 """The capability artifact: a typed, versioned, reviewable execution IR.
 
-A capability is not a click log. It is a small typed contract a human reviewer
+A capability is not a click log. It is a small typed contract a human
 and a calling agent can both understand: what it needs (inputs), what it returns
 (outputs), the ordered steps with semantic targets and risk, per-step observable
 postconditions and business outcomes, and a success checkpoint.

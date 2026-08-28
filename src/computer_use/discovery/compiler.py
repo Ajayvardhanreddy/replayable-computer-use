@@ -111,8 +111,8 @@ def _synthesized_postcondition(trace_step: TraceStep) -> Condition | None:
 
 @dataclass(frozen=True)
 class VerificationProvenance:
-    """Which discovery steps became a write's embedded verification, so a reviewer can
-    see the model discovered the re-derivation rather than the compiler inventing it.
+    """Which discovery steps became a write's embedded verification, so it is visible
+    that the model discovered the re-derivation rather than the compiler inventing it.
 
     Indices are 1-based discovery step positions, matching the ``step_executed`` events
     in the discovery trace evidence.

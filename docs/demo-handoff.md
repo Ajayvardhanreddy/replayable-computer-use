@@ -1,5 +1,10 @@
 # Human Handoff - Demo
 
+> **Scope:** an annotated, transcript-level walkthrough of the handoff demos, for readers who
+> want to see the exact operator prompts and panels. The canonical command list for every demo
+> is [`../HOW_TO_DEMO.md`](../HOW_TO_DEMO.md); the design behind it is
+> [`handoff-design.md`](handoff-design.md).
+
 Two runnable demos show a human taking over the exact live browser session and handing
 it back. They exercise the same control-transfer primitive from two directions:
 

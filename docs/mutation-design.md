@@ -1,5 +1,10 @@
 # Consequential Mutation Design
 
+> **Scope:** the semantics of a single consequential write - dispatch-once, discovered
+> read-only verification, and the committed / not-committed / ambiguous decision. For the
+> runnable write demos see [`../HOW_TO_DEMO.md`](../HOW_TO_DEMO.md); for the system context see
+> [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 ## 1. The problem
 
 The dangerous case for automating a legacy banking UI is not layout drift - it is a
