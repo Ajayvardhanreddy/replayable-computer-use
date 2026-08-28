@@ -5,8 +5,8 @@ banking UIs, with a software-owned trust boundary and safety guardrails.
 
 The discovery → capability → replay vertical slice, the safety/redaction boundary, the
 consequential-write (mutation) semantics, and same-session human-in-the-loop takeover are
-implemented and tested. The design write-up — architecture, artifact schema, determinism and
-error handling, heterogeneity and multi-tenant reuse, escalation and handoff, safety, and cuts —
+implemented and tested. The design write-up - architecture, artifact schema, determinism and
+error handling, heterogeneity and multi-tenant reuse, escalation and handoff, safety, and cuts -
 is in [`REPORT.md`](REPORT.md). Deeper design notes are in
 [`docs/handoff-design.md`](docs/handoff-design.md) and
 [`docs/mutation-design.md`](docs/mutation-design.md); runnable demos with expected output are in
@@ -43,7 +43,7 @@ Then open http://localhost:8000. LegacyCore doubles as a deterministic eval envi
 `?scenario=unexpected_dialog`, `?scenario=session_expired`, `?scenario=permission_denied`,
 `?scenario=not_found`), and each maps to a typed replay outcome. The full scenario → outcome
 matrix is in [`docs/eval-scenarios.md`](docs/eval-scenarios.md). Ordinary product behaviour stays
-data-driven — a member number with no record (e.g. `99999`) yields a "Member record not found".
+data-driven - a member number with no record (e.g. `99999`) yields a "Member record not found".
 
 ## Configuration
 

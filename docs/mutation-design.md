@@ -2,7 +2,7 @@
 
 ## 1. The problem
 
-The dangerous case for automating a legacy banking UI is not layout drift — it is a
+The dangerous case for automating a legacy banking UI is not layout drift - it is a
 consequential write whose completion signal is lost:
 
 ```
@@ -27,10 +27,10 @@ form, continue to review) are read-only and run unattended; only the **commit** 
 
 The model can never authorize itself, and without approval nothing is dispatched.
 
-## 3. Effect certainty — never blindly retry
+## 3. Effect certainty - never blindly retry
 
-The dispatch boundary is the click call itself. Everything before it — resolution,
-policy, confirmation, ownership — precedes any side effect, so a failure there is
+The dispatch boundary is the click call itself. Everything before it - resolution,
+policy, confirmation, ownership - precedes any side effect, so a failure there is
 definitely `NOT_DISPATCHED` and safe to fail normally. The moment the consequential click
 is invoked, the effect may have reached the application:
 
@@ -44,22 +44,22 @@ A consequential dispatch is executed exactly once and is **never** wrapped in th
 transient-retry: a failure at the dispatch call raises a non-retryable "uncertain" signal
 from the trusted kernel, so no code path can re-issue it.
 
-## 4. Independent verification — discovered, not assumed
+## 4. Independent verification - discovered, not assumed
 
 The write's effect is confirmed by an **independent read the model discovered while
 reaching the goal**, not by trusting the commit's own response. When the goal requires
-confirmation, the model re-derives the member's state after the commit — returning through
+confirmation, the model re-derives the member's state after the commit - returning through
 the persistent navigation, re-querying the member by the same parameter, reaching the
-accounts view — and observes the effect there. The compiler captures that read-only
+accounts view - and observes the effect there. The compiler captures that read-only
 sub-trace as an **embedded verification recipe** on the consequential step: one flat,
 read-only sequence, never a nested workflow.
 
 At replay the recipe is re-executed (model-free) through the same kernel, under a mode
 that independently refuses any step whose software-derived risk is above `READ_ONLY`. So a
 malformed or edited artifact can never turn verification into another write. The compiler
-enforces the same read-only rule when it builds the recipe — defense in depth.
+enforces the same read-only rule when it builds the recipe - defense in depth.
 
-## 5. Attribution — a transition, not mere presence
+## 5. Attribution - a transition, not mere presence
 
 A row being present *after* the write does not prove *this* write created it (it may have
 pre-existed). Attribution requires a **transition**: a trusted matcher evaluates the
@@ -72,8 +72,8 @@ effect absent, read source is authoritative     -> NOT_COMMITTED -> Failure(MUTA
 effect not establishable, or baseline unknown    -> AMBIGUOUS     -> Escalated(MUTATION_AMBIGUOUS)
 ```
 
-Whether an *absent* effect is a definite non-commit — versus a source that may lag the
-write — is a property of the environment, decided by trusted runtime configuration, never
+Whether an *absent* effect is a definite non-commit - versus a source that may lag the
+write - is a property of the environment, decided by trusted runtime configuration, never
 serialized in the artifact. The conservative default is that absence is ambiguous.
 
 ## 6. Result mapping (the four-shape contract is preserved)
@@ -89,8 +89,8 @@ serialized in the artifact. The conservative default is that absence is ambiguou
 ## 7. Escalation and human handoff
 
 An ambiguous mutation is never a dead end. The escalation carries a **full, sanitized
-handoff case** — the capability, the step, why it stopped, that the write was dispatched
-exactly once and neither retried nor assumed, and what remains to confirm — so a human can
+handoff case** - the capability, the step, why it stopped, that the write was dispatched
+exactly once and neither retried nor assumed, and what remains to confirm - so a human can
 act with full context and only structural state (no member id, no amount).
 
 Two paths follow, both reusing the same control-lease handoff seam:
@@ -98,7 +98,7 @@ Two paths follow, both reusing the same control-lease handoff seam:
 - **Recoverable, in-session:** if the block is something a human can clear on the live
   session (for example an unexpected dialog on the read path), the operator takes exclusive
   control of the *same* session, clears it, and resumes. Automation then re-runs **only the
-  read-only verification** — never the write — and completes.
+  read-only verification** - never the write - and completes.
 - **Out of band:** if the read cannot be established at all, the unattended runner emits the
   handoff case and stops. A human resolves it with access the intentionally boxed-in agent
   does not have (retry the read, or check the system of record directly), then closes it.
@@ -108,7 +108,7 @@ could not observe.
 
 ## 8. Idempotency
 
-Application-supported idempotency keys are the best defense against duplicate writes — when
+Application-supported idempotency keys are the best defense against duplicate writes - when
 available. A legacy UI reached only by driving the browser has no such key, and inventing an
 API-only mechanism would not reflect the real environment. When idempotency is unavailable,
 **dispatch-once plus independent verification** is the load-bearing mechanism: dispatch once,
